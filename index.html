@@ -59,99 +59,179 @@
               <span id="frame-readout">T+ 00.00 S</span>
             </div>
 
-            <button id="options-toggle" class="options-toggle" type="button" aria-expanded="true">
-              <span>CONTROL PANELS</span><strong id="options-toggle-status">HIDE</strong>
-            </button>
-
             <div id="viewer-options" class="viewer-options">
-              <div class="camera-control" aria-label="Automatic camera orbit controls">
+              <section class="control-section control-section--camera" aria-label="Camera controls">
+                <button
+                  id="camera-controls-toggle"
+                  class="control-section-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="camera-controls-panel"
+                >
+                  <span>CAMERA CONTROLS</span><strong id="camera-controls-status">SHOW</strong>
+                </button>
+                <div id="camera-controls-panel" class="control-section-panel" hidden>
+                  <div class="camera-control" aria-label="Automatic camera orbit controls">
+                    <button
+                      id="camera-orbit-toggle"
+                      class="camera-orbit-toggle"
+                      type="button"
+                      aria-pressed="false"
+                      aria-label="Start automatic camera rotation"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4.5 9A8 8 0 0 1 18 5.5L20 8M19.5 15A8 8 0 0 1 6 18.5L4 16M20 4v4h-4M4 20v-4h4" />
+                      </svg>
+                      <span>AUTO ORBIT</span>
+                      <strong id="camera-orbit-status">OFF</strong>
+                    </button>
+                    <div class="camera-speed-control" aria-label="Camera rotation speed">
+                      <span>CAMERA SPEED</span>
+                      <button type="button" data-camera-speed="0.25">0.25×</button>
+                      <button type="button" data-camera-speed="0.5">0.5×</button>
+                      <button type="button" data-camera-speed="1" class="active">1×</button>
+                      <button type="button" data-camera-speed="2">2×</button>
+                    </div>
+                    <div class="camera-direction-control" aria-label="Camera rotation direction">
+                      <span>DIRECTION</span>
+                      <button type="button" data-camera-direction="1" class="active" aria-label="Rotate clockwise">CW</button>
+                      <button type="button" data-camera-direction="-1" aria-label="Rotate counterclockwise">CCW</button>
+                    </div>
+                  </div>
+
+                  <div class="avatar-position-control" aria-label="Avatar screen position controls">
+                    <span>AVATAR POSITION</span>
+                    <button type="button" data-avatar-move="left" aria-label="Move avatar left">←</button>
+                    <button type="button" data-avatar-move="up" aria-label="Move avatar up">↑</button>
+                    <button type="button" data-avatar-move="down" aria-label="Move avatar down">↓</button>
+                    <button type="button" data-avatar-move="right" aria-label="Move avatar right">→</button>
+                    <button type="button" data-avatar-move="center" class="avatar-center-button">CENTER</button>
+                    <output id="avatar-position-readout" aria-live="polite">X 0.0 · Y 0.0</output>
+                  </div>
+
+                  <div class="environment-control environment-control--camera" aria-label="Scene lighting controls">
+                    <div class="floor-light-control" aria-label="Floor light level">
+                      <span>FLOOR LIGHT</span>
+                      <button type="button" data-floor-light="off" class="active">OFF</button>
+                      <button type="button" data-floor-light="low">LOW</button>
+                      <button type="button" data-floor-light="medium">MED</button>
+                      <button type="button" data-floor-light="high">HIGH</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="control-section control-section--line" aria-label="Line controls">
+                <div class="control-section-header control-section-header--line">
+                  <div class="line-display-stack">
+                    <button
+                      id="line-display-toggle"
+                      class="control-section-toggle line-display-toggle"
+                      type="button"
+                      aria-pressed="false"
+                      aria-label="Turn line display on"
+                    >
+                      <span>LINE</span><strong id="line-display-status">OFF</strong>
+                    </button>
+                    <button
+                      id="body-points-toggle"
+                      class="control-section-toggle body-points-toggle"
+                      type="button"
+                      aria-pressed="true"
+                      aria-label="Hide colored body points"
+                    >
+                      <span>COLOR DOTS</span><strong id="body-points-status">ON</strong>
+                    </button>
+                  </div>
+                  <button
+                    id="line-controls-toggle"
+                    class="control-section-toggle line-controls-toggle"
+                    type="button"
+                    aria-expanded="false"
+                    aria-controls="line-controls-panel"
+                  >
+                    <span>CONTROLS</span><strong id="line-controls-status">SHOW</strong>
+                  </button>
+                </div>
+                <div id="line-controls-panel" class="control-section-panel" hidden>
+                  <div class="trace-control" aria-label="3D trace appearance controls">
+                    <div class="trace-option-group" aria-label="Trace retention">
+                      <span>TRACE</span>
+                      <button type="button" data-trace-mode="permanent" class="active">PERMANENT</button>
+                      <button type="button" data-trace-mode="long">FADE 15S</button>
+                      <button type="button" data-trace-mode="medium">FADE 8S</button>
+                      <button type="button" data-trace-mode="short">FADE 3S</button>
+                      <button type="button" data-trace-mode="brief">FADE 1.5S</button>
+                      <button type="button" data-trace-mode="instant">FADE 1S</button>
+                    </div>
+                    <div class="trace-option-group trace-width-control" aria-label="Trace line width">
+                      <span>WIDTH</span>
+                      <button type="button" data-trace-width="1.25" class="active">THIN</button>
+                      <button type="button" data-trace-width="2.5">MEDIUM</button>
+                      <button type="button" data-trace-width="4">BOLD</button>
+                    </div>
+                  </div>
+
+                  <div class="trace-style-control" aria-label="3D trace rendering controls">
+                    <div class="trace-option-group" aria-label="Trace visibility">
+                      <span>DISPLAY</span>
+                      <button type="button" data-trace-visible="true">ON</button>
+                      <button type="button" data-trace-visible="false" class="active">OFF</button>
+                    </div>
+                    <div class="trace-option-group" aria-label="Trace point display">
+                      <span>POINTS</span>
+                      <button type="button" data-trace-dots="true" class="active">DOTS + LINE</button>
+                      <button type="button" data-trace-dots="false">LINE ONLY</button>
+                    </div>
+                    <div class="trace-option-group" aria-label="Trace path smoothing">
+                      <span>PATH</span>
+                      <button type="button" data-trace-smoothing="false" class="active">RAW</button>
+                      <button type="button" data-trace-smoothing="true">SMOOTH</button>
+                    </div>
+                  </div>
+
+                  <div class="environment-control environment-control--line" aria-label="Trace sampling controls">
+                    <div class="trace-sampling-control" aria-label="Line sampling rate">
+                      <span>LINE SAMPLE RATE</span>
+                      <button type="button" data-trace-sample-rate="5">5 HZ</button>
+                      <button type="button" data-trace-sample-rate="10">10 HZ</button>
+                      <button type="button" data-trace-sample-rate="20" class="active">20 HZ</button>
+                      <button type="button" data-trace-sample-rate="30">30 HZ</button>
+                      <button type="button" data-trace-sample-rate="60">60 HZ</button>
+                      <button type="button" data-trace-sample-rate="90">90 HZ</button>
+                      <button type="button" data-trace-sample-rate="120">120 HZ</button>
+                      <button type="button" data-trace-sample-rate="240">240 HZ</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <div class="visualization-menu">
               <button
-                id="camera-orbit-toggle"
-                class="camera-orbit-toggle"
+                id="visualization-menu-toggle"
+                class="visualization-menu-toggle"
                 type="button"
-                aria-pressed="false"
-                aria-label="Start automatic camera rotation"
+                aria-expanded="false"
+                aria-controls="visualization-menu-panel"
               >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4.5 9A8 8 0 0 1 18 5.5L20 8M19.5 15A8 8 0 0 1 6 18.5L4 16M20 4v4h-4M4 20v-4h4" />
-                </svg>
-                <span>AUTO ORBIT</span>
-                <strong id="camera-orbit-status">OFF</strong>
+                <span>N.60 ELEMENTS</span><strong id="visualization-menu-status">SHOW</strong>
               </button>
-              <div class="camera-speed-control" aria-label="Camera rotation speed">
-                <span>CAMERA SPEED</span>
-                <button type="button" data-camera-speed="0.25">0.25×</button>
-                <button type="button" data-camera-speed="0.5">0.5×</button>
-                <button type="button" data-camera-speed="1" class="active">1×</button>
-                <button type="button" data-camera-speed="2">2×</button>
-              </div>
-              <div class="camera-direction-control" aria-label="Camera rotation direction">
-                <span>DIRECTION</span>
-                <button type="button" data-camera-direction="1" class="active" aria-label="Rotate clockwise">CW</button>
-                <button type="button" data-camera-direction="-1" aria-label="Rotate counterclockwise">CCW</button>
-              </div>
-              </div>
-
-              <div class="avatar-position-control" aria-label="Avatar screen position controls">
-                <span>AVATAR POSITION</span>
-                <button type="button" data-avatar-move="left" aria-label="Move avatar left">←</button>
-                <button type="button" data-avatar-move="up" aria-label="Move avatar up">↑</button>
-                <button type="button" data-avatar-move="down" aria-label="Move avatar down">↓</button>
-                <button type="button" data-avatar-move="right" aria-label="Move avatar right">→</button>
-                <button type="button" data-avatar-move="center" class="avatar-center-button">CENTER</button>
-                <output id="avatar-position-readout" aria-live="polite">X 0.0 · Y 0.0</output>
-              </div>
-
-              <div class="trace-control" aria-label="3D trace appearance controls">
-                <div class="trace-option-group" aria-label="Trace retention">
-                  <span>TRACE</span>
-                  <button type="button" data-trace-mode="permanent" class="active">PERMANENT</button>
-                  <button type="button" data-trace-mode="long">FADE 15S</button>
-                  <button type="button" data-trace-mode="medium">FADE 8S</button>
-                  <button type="button" data-trace-mode="short">FADE 3S</button>
-                  <button type="button" data-trace-mode="brief">FADE 1.5S</button>
-                  <button type="button" data-trace-mode="instant">FADE 1S</button>
+              <div id="visualization-menu-panel" class="visualization-menu-panel" hidden>
+                <div class="experiment-control" aria-label="Movement visualization lenses">
+                  <span>MOVEMENT LENS</span>
+                  <button type="button" data-experiment="energy" title="Force, momentum, acceleration and deceleration">ENERGY</button>
+                  <button type="button" data-experiment="curves" title="Circular pathways, arcs and curved versus linear motion">CIRCLES + CURVES</button>
+                  <button type="button" data-experiment="axes" title="Joint pivots, rotational axes and balance points">AXIS POINTS</button>
+                  <button type="button" data-experiment="sync" title="Coordination between left and right limbs">SYNCHRONOUS LIMBS</button>
+                  <button type="button" data-experiment="space" title="Body envelope, directions, planes and dimensions">EXTERNAL BODY SPACES</button>
+                  <button type="button" data-experiment="relations" title="Attention shifts between body parts and poses">SHIFTING RELATIONS</button>
+                  <button type="button" data-experiment="all">ALL</button>
+                  <button type="button" data-experiment="off" class="active">OFF</button>
                 </div>
-                <div class="trace-option-group trace-width-control" aria-label="Trace line width">
-                  <span>WIDTH</span>
-                  <button type="button" data-trace-width="1.25" class="active">THIN</button>
-                  <button type="button" data-trace-width="2.5">MEDIUM</button>
-                  <button type="button" data-trace-width="4">BOLD</button>
-                </div>
-              </div>
-
-              <div class="trace-style-control" aria-label="3D trace rendering controls">
-                <div class="trace-option-group" aria-label="Trace point display">
-                  <span>POINTS</span>
-                  <button type="button" data-trace-dots="true" class="active">DOTS + LINE</button>
-                  <button type="button" data-trace-dots="false">LINE ONLY</button>
-                </div>
-                <div class="trace-option-group" aria-label="Trace path smoothing">
-                  <span>PATH</span>
-                  <button type="button" data-trace-smoothing="false" class="active">RAW</button>
-                  <button type="button" data-trace-smoothing="true">SMOOTH</button>
-                </div>
-              </div>
-
-              <div class="environment-control" aria-label="Floor and trace sampling controls">
-                <div class="floor-light-control" aria-label="Floor light level">
-                  <span>FLOOR LIGHT</span>
-                  <button type="button" data-floor-light="off" class="active">OFF</button>
-                  <button type="button" data-floor-light="low">LOW</button>
-                  <button type="button" data-floor-light="medium">MED</button>
-                  <button type="button" data-floor-light="high">HIGH</button>
-                </div>
-                <div class="trace-sampling-control" aria-label="Line sampling rate">
-                  <span>LINE SAMPLE RATE</span>
-                  <button type="button" data-trace-sample-rate="5">5 HZ</button>
-                  <button type="button" data-trace-sample-rate="10">10 HZ</button>
-                  <button type="button" data-trace-sample-rate="20" class="active">20 HZ</button>
-                  <button type="button" data-trace-sample-rate="30">30 HZ</button>
-                  <button type="button" data-trace-sample-rate="60">60 HZ</button>
-                  <button type="button" data-trace-sample-rate="90">90 HZ</button>
-                  <button type="button" data-trace-sample-rate="120">120 HZ</button>
-                  <button type="button" data-trace-sample-rate="240">240 HZ</button>
-                </div>
+                <p id="experiment-description" class="experiment-description" aria-live="polite">
+                  MOVEMENT LENSES OFF · SELECT ONE OR COMBINE MULTIPLE VIEWS
+                </p>
               </div>
             </div>
 
