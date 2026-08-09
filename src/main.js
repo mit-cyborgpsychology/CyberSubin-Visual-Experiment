@@ -2991,7 +2991,7 @@ function animate() {
       state.lastClipTime = clipTime;
     }
     centerCharacter();
-    if (looped) resetTrackerSamples({ preserveTrails: true });
+    if (looped) resetTrackerSamples();
 
     if (!EMBEDDED_VIEW) state.sampleElapsed += rawDelta;
     const trailElapsedBeforeFrame = state.trailElapsed;
