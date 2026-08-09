@@ -52,7 +52,13 @@ export default defineConfig({
   publicDir: 'glb-optim',
   build: {
     outDir: 'dist',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: resolve('index.html'),
+        grid: resolve('grid.html')
+      }
+    }
   },
   server: {
     host: '127.0.0.1'

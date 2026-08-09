@@ -13,12 +13,8 @@
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="/" aria-label="Cyber Subin home">
-          <span class="brand-mark" aria-hidden="true">
-            <span></span><span></span><span></span>
-          </span>
           <span class="brand-copy">
             <strong>CYBER SUBIN</strong>
-            <small>ระบำ · MOTION ATLAS</small>
           </span>
         </a>
 
@@ -32,21 +28,18 @@
           </div>
         </div>
 
-        <div class="status-block" aria-label="System status">
-          <span class="status-dot"></span>
-          <span><strong>LIVE SKELETON</strong><small id="status-detail">10 SIGNALS · MODELS</small></span>
-        </div>
+        <nav class="view-switcher" aria-label="View navigation">
+          <button id="hide-control-buttons" type="button" aria-pressed="false">HIDE BUTTONS</button>
+          <button id="hide-all-ui" type="button" aria-pressed="false">HIDE ALL</button>
+          <a class="active" href="/" aria-current="page">SINGLE VIEW</a>
+          <a id="grid-view-link" href="/grid.html">GRID VIEW</a>
+        </nav>
       </header>
 
       <main class="workspace">
         <section class="viewer-panel" aria-label="Interactive 3D movement viewer">
           <div id="scene-wrap" class="scene-wrap">
             <canvas id="three-canvas"></canvas>
-
-            <div class="viewer-corner viewer-corner--tl" aria-hidden="true"></div>
-            <div class="viewer-corner viewer-corner--tr" aria-hidden="true"></div>
-            <div class="viewer-corner viewer-corner--bl" aria-hidden="true"></div>
-            <div class="viewer-corner viewer-corner--br" aria-hidden="true"></div>
 
             <div class="loading-state" id="loading-state" role="status" aria-live="polite">
               <div class="loading-orbit"><span></span><span></span></div>
@@ -55,11 +48,52 @@
             </div>
 
             <div class="viewer-readout viewer-readout--top">
-              <span>REAL-TIME KINEMATIC TRACE</span>
               <span id="frame-readout">T+ 00.00 S</span>
             </div>
 
             <div id="viewer-options" class="viewer-options">
+              <section class="control-section control-section--avatar-style" aria-label="Avatar appearance controls">
+                <button
+                  id="avatar-style-toggle"
+                  class="control-section-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="avatar-style-panel"
+                >
+                  <span>AVATAR STYLE</span><strong id="avatar-style-status">SHOW</strong>
+                </button>
+                <div id="avatar-style-panel" class="control-section-panel avatar-style-panel" hidden>
+                  <div class="avatar-style-control" aria-label="Avatar color, surface and lighting presets">
+                    <div class="trace-option-group" aria-label="Avatar color">
+                      <span>COLOR</span>
+                      <button type="button" data-avatar-color="pearl" class="active">PEARL</button>
+                      <button type="button" data-avatar-color="cyan">CYAN</button>
+                      <button type="button" data-avatar-color="blue">BLUE</button>
+                      <button type="button" data-avatar-color="violet">VIOLET</button>
+                      <button type="button" data-avatar-color="magenta">MAGENTA</button>
+                      <button type="button" data-avatar-color="gold">GOLD</button>
+                      <button type="button" data-avatar-color="lime">LIME</button>
+                      <button type="button" data-avatar-color="coral">CORAL</button>
+                    </div>
+                    <div class="trace-option-group" aria-label="Avatar surface">
+                      <span>SURFACE</span>
+                      <button type="button" data-avatar-surface="smooth" class="active">SMOOTH</button>
+                      <button type="button" data-avatar-surface="rough">ROUGH</button>
+                      <button type="button" data-avatar-surface="points">POINT CLOUD</button>
+                      <button type="button" data-avatar-surface="skeleton">SKELETON</button>
+                    </div>
+                    <div class="trace-option-group" aria-label="Avatar lighting">
+                      <span>LIGHTING</span>
+                      <button type="button" data-lighting-preset="studio" class="active">STUDIO</button>
+                      <button type="button" data-lighting-preset="bright">BRIGHT</button>
+                      <button type="button" data-lighting-preset="side">SIDE LIGHT</button>
+                      <button type="button" data-lighting-preset="rim">RIM</button>
+                      <button type="button" data-lighting-preset="silhouette">SILHOUETTE</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
               <section class="control-section control-section--camera" aria-label="Camera controls">
                 <button
                   id="camera-controls-toggle"
@@ -129,19 +163,19 @@
                       class="control-section-toggle line-display-toggle"
                       type="button"
                       aria-pressed="false"
-                      aria-label="Turn line display on"
+                      aria-label="Turn trace display on"
                     >
-                      <span>LINE</span><strong id="line-display-status">OFF</strong>
+                      <span>TRACE</span><strong id="line-display-status">OFF</strong>
                     </button>
                     <button
-                      id="body-points-toggle"
-                      class="control-section-toggle body-points-toggle"
-                      type="button"
-                      aria-pressed="true"
-                      aria-label="Hide colored body points"
-                    >
-                      <span>COLOR DOTS</span><strong id="body-points-status">ON</strong>
-                    </button>
+                    id="body-points-toggle"
+                    class="control-section-toggle body-points-toggle"
+                    type="button"
+                    aria-pressed="false"
+                    aria-label="Show colored body points"
+                  >
+                    <span>COLOR DOTS</span><strong id="body-points-status">OFF</strong>
+                  </button>
                   </div>
                   <button
                     id="line-controls-toggle"
@@ -180,13 +214,13 @@
                     </div>
                     <div class="trace-option-group" aria-label="Trace point display">
                       <span>POINTS</span>
-                      <button type="button" data-trace-dots="true" class="active">DOTS + LINE</button>
-                      <button type="button" data-trace-dots="false">LINE ONLY</button>
+                      <button type="button" data-trace-dots="true">DOTS + LINE</button>
+                      <button type="button" data-trace-dots="false" class="active">LINE ONLY</button>
                     </div>
                     <div class="trace-option-group" aria-label="Trace path smoothing">
                       <span>PATH</span>
-                      <button type="button" data-trace-smoothing="false" class="active">RAW</button>
-                      <button type="button" data-trace-smoothing="true">SMOOTH</button>
+                      <button type="button" data-trace-smoothing="false">RAW</button>
+                      <button type="button" data-trace-smoothing="true" class="active">SMOOTH</button>
                     </div>
                   </div>
 
@@ -195,15 +229,27 @@
                       <span>LINE SAMPLE RATE</span>
                       <button type="button" data-trace-sample-rate="5">5 HZ</button>
                       <button type="button" data-trace-sample-rate="10">10 HZ</button>
-                      <button type="button" data-trace-sample-rate="20" class="active">20 HZ</button>
+                      <button type="button" data-trace-sample-rate="20">20 HZ</button>
                       <button type="button" data-trace-sample-rate="30">30 HZ</button>
                       <button type="button" data-trace-sample-rate="60">60 HZ</button>
                       <button type="button" data-trace-sample-rate="90">90 HZ</button>
                       <button type="button" data-trace-sample-rate="120">120 HZ</button>
-                      <button type="button" data-trace-sample-rate="240">240 HZ</button>
+                      <button type="button" data-trace-sample-rate="240" class="active">240 HZ</button>
                     </div>
                   </div>
                 </div>
+              </section>
+
+              <section class="control-section control-section--analysis" aria-label="Motion analysis display">
+                <button
+                  id="analysis-panel-toggle"
+                  class="control-section-toggle analysis-panel-toggle"
+                  type="button"
+                  aria-expanded="true"
+                  aria-controls="analysis-panel"
+                >
+                  <span>MOTION ANALYSIS</span><strong id="analysis-panel-status">HIDE</strong>
+                </button>
               </section>
             </div>
 
@@ -215,7 +261,7 @@
                 aria-expanded="false"
                 aria-controls="visualization-menu-panel"
               >
-                <span>N.60 ELEMENTS</span><strong id="visualization-menu-status">SHOW</strong>
+                <span>No. 60 ELEMENTS</span><strong id="visualization-menu-status">SHOW</strong>
               </button>
               <div id="visualization-menu-panel" class="visualization-menu-panel" hidden>
                 <div class="experiment-control" aria-label="Movement visualization lenses">
@@ -248,7 +294,7 @@
           </div>
         </section>
 
-        <aside class="analysis-panel panel">
+        <aside id="analysis-panel" class="analysis-panel panel">
           <div
             id="analysis-resizer"
             class="analysis-resizer"

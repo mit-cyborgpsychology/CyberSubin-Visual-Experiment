@@ -12,10 +12,31 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { posture } from '../59.ts';
 import './styles.css';
 
+const PAGE_PARAMS = new URLSearchParams(window.location.search);
+const GRID_STATE_KEY = 'cyber-subin-six-avatar-state';
+const EMBEDDED_VIEW = PAGE_PARAMS.get('embedded') === '1';
+const RETURN_TO_GRID = PAGE_PARAMS.get('from') === 'grid';
+const REQUESTED_PROGRESS = PAGE_PARAMS.has('progress') ? Number(PAGE_PARAMS.get('progress')) : null;
+const REQUESTED_PLAYING = PAGE_PARAMS.has('playing') ? PAGE_PARAMS.get('playing') !== 'false' : null;
+const REQUESTED_SPEED = PAGE_PARAMS.has('speed') ? Number(PAGE_PARAMS.get('speed')) : null;
+let REQUESTED_GRID_CELL_STATE = null;
+if (RETURN_TO_GRID) {
+  try {
+    const storedGridState = JSON.parse(window.sessionStorage.getItem(GRID_STATE_KEY));
+    const focusedIndex = Number(storedGridState?.focusedIndex);
+    if (Number.isInteger(focusedIndex) && focusedIndex >= 0 && focusedIndex < 6) {
+      REQUESTED_GRID_CELL_STATE = storedGridState.cells?.[focusedIndex] ?? null;
+    }
+  } catch {
+    REQUESTED_GRID_CELL_STATE = null;
+  }
+}
+document.body.classList.toggle('embedded-view', EMBEDDED_VIEW);
+
 const DISPLAY_HEIGHT = 3;
 const SIGNAL_WINDOW = 270;
-const TRAIL_LENGTH = 4096;
-const TRAIL_RENDER_LENGTH = TRAIL_LENGTH * 2;
+const TRAIL_INITIAL_CAPACITY = 4096;
+const TRAIL_INITIAL_RENDER_CAPACITY = TRAIL_INITIAL_CAPACITY * 2;
 const CURVE_HISTORY_LENGTH = 108;
 const MODEL_COUNT = 59;
 const TRACE_DURATION_SECONDS = {
@@ -32,6 +53,54 @@ const FLOOR_LIGHT_LEVELS = {
   medium: { color: 0x050708, gridOpacity: 0.42, ringOpacity: 0.1 },
   high: { color: 0x162226, gridOpacity: 0.9, ringOpacity: 0.34 }
 };
+const AVATAR_COLORS = {
+  pearl: '#c7c9c5',
+  cyan: '#65f3ff',
+  blue: '#3977ff',
+  violet: '#a56cff',
+  magenta: '#ff4fbc',
+  gold: '#e7ad4f',
+  lime: '#a8ff3e',
+  coral: '#ff6f61'
+};
+const LIGHTING_PRESETS = {
+  studio: {
+    hemisphere: ['#d9f8ff', '#07080b', 2.4],
+    key: ['#fff5e8', 3.7, [4.5, 7, 5]],
+    rim: ['#65f3ff', 3.2, [-4, 3.5, -4]],
+    fill: ['#a98bff', 1.15, [4, 1.5, -3]],
+    exposure: 1.15
+  },
+  bright: {
+    hemisphere: ['#f4fbff', '#11151a', 4.2],
+    key: ['#ffffff', 6.4, [3.5, 7.5, 5.5]],
+    rim: ['#c7faff', 2.5, [-4, 4, -4]],
+    fill: ['#d8ceff', 2.8, [4, 2, -2]],
+    exposure: 1.3
+  },
+  side: {
+    hemisphere: ['#91a7b0', '#030405', 1.35],
+    key: ['#fff0dc', 6.2, [-5.5, 3.2, 1.5]],
+    rim: ['#65f3ff', 1.1, [4.5, 3, -4]],
+    fill: ['#8b78c7', 0.25, [4, 1, 2]],
+    exposure: 1.08
+  },
+  rim: {
+    hemisphere: ['#617078', '#020304', 0.72],
+    key: ['#d7e7eb', 0.65, [2, 6, 4]],
+    rim: ['#65f3ff', 7.4, [-3.5, 4.5, -5.5]],
+    fill: ['#ff6fae', 0.65, [4.5, 2, -3]],
+    exposure: 1.12
+  },
+  silhouette: {
+    hemisphere: ['#22292d', '#000000', 0.2],
+    key: ['#42545b', 0.15, [0, 5, 5]],
+    rim: ['#b9fbff', 8.8, [0, 4, -6]],
+    fill: ['#000000', 0, [4, 2, -3]],
+    exposure: 0.92
+  }
+};
+const AVATAR_POINT_BUDGET = EMBEDDED_VIEW ? 6000 : 22000;
 const EXPERIMENT_INFO = {
   energy: {
     label: 'ENERGY',
@@ -193,8 +262,10 @@ const TRACK_DEFINITIONS = [
 
 const ui = {
   appShell: document.querySelector('.app-shell'),
+  gridViewLink: document.querySelector('#grid-view-link'),
+  hideControlButtons: document.querySelector('#hide-control-buttons'),
+  hideAllUi: document.querySelector('#hide-all-ui'),
   select: document.querySelector('#dance-select'),
-  statusDetail: document.querySelector('#status-detail'),
   sceneWrap: document.querySelector('#scene-wrap'),
   threeCanvas: document.querySelector('#three-canvas'),
   loading: document.querySelector('#loading-state'),
@@ -211,6 +282,12 @@ const ui = {
   timeline: document.querySelector('#timeline'),
   resetButton: document.querySelector('#reset-button'),
   speedButtons: [...document.querySelectorAll('[data-speed]')],
+  avatarStyleToggle: document.querySelector('#avatar-style-toggle'),
+  avatarStyleStatus: document.querySelector('#avatar-style-status'),
+  avatarStylePanel: document.querySelector('#avatar-style-panel'),
+  avatarColorButtons: [...document.querySelectorAll('[data-avatar-color]')],
+  avatarSurfaceButtons: [...document.querySelectorAll('[data-avatar-surface]')],
+  lightingPresetButtons: [...document.querySelectorAll('[data-lighting-preset]')],
   cameraOrbitToggle: document.querySelector('#camera-orbit-toggle'),
   cameraOrbitStatus: document.querySelector('#camera-orbit-status'),
   cameraSpeedButtons: [...document.querySelectorAll('[data-camera-speed]')],
@@ -242,6 +319,8 @@ const ui = {
   floorLightButtons: [...document.querySelectorAll('[data-floor-light]')],
   traceSampleRateButtons: [...document.querySelectorAll('[data-trace-sample-rate]')],
   analysisPanel: document.querySelector('.analysis-panel'),
+  analysisPanelToggle: document.querySelector('#analysis-panel-toggle'),
+  analysisPanelStatus: document.querySelector('#analysis-panel-status'),
   analysisResizer: document.querySelector('#analysis-resizer')
 };
 
@@ -257,6 +336,18 @@ const state = {
   trackers: [],
   playing: true,
   speed: 1,
+  avatarStyleOpen: false,
+  avatarColor: 'pearl',
+  surfaceMode: 'smooth',
+  lightingPreset: 'studio',
+  skeletonGroup: null,
+  skeletonBones: [],
+  skeletonConnections: [],
+  skeletonLine: null,
+  skeletonLinePositions: null,
+  skeletonJoints: null,
+  pointCloudGroup: null,
+  pointCloudEntries: [],
   cameraOrbit: false,
   cameraOrbitSpeed: 1,
   cameraOrbitDirection: 1,
@@ -271,18 +362,22 @@ const state = {
   traceMode: 'permanent',
   traceWidth: 1.25,
   traceVisible: false,
-  bodyPointsVisible: true,
-  traceDots: true,
-  traceSmoothing: false,
-  traceSampleRate: 20,
+  bodyPointsVisible: false,
+  traceDots: false,
+  traceSmoothing: true,
+  traceSampleRate: 240,
   floorLight: 'off',
   graphMode: 'all',
   cameraControlsOpen: false,
   lineControlsOpen: false,
+  analysisVisible: true,
   analysisWidth: 390,
   panelResizeStartX: 0,
   panelResizeStartWidth: 390,
   panelResizing: false,
+  embeddedTransportElapsed: 0,
+  initialTransportPending: !EMBEDDED_VIEW && (REQUESTED_PROGRESS !== null || REQUESTED_PLAYING !== null),
+  initialViewStatePending: !EMBEDDED_VIEW && Boolean(REQUESTED_GRID_CELL_STATE?.view),
   duration: 0,
   clipStart: 0,
   lastClipTime: 0,
@@ -355,6 +450,7 @@ scene.add(ground);
 const grid = new THREE.GridHelper(12, 24, 0x25383c, 0x13191c);
 grid.material.transparent = true;
 grid.material.opacity = FLOOR_LIGHT_LEVELS.off.gridOpacity;
+grid.visible = !EMBEDDED_VIEW;
 grid.position.y = 0;
 scene.add(grid);
 
@@ -371,6 +467,7 @@ for (const radius of [1.2, 2.2, 3.2]) {
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.003;
+  ring.visible = !EMBEDDED_VIEW;
   scene.add(ring);
   floorRings.push(ring);
 }
@@ -392,6 +489,8 @@ const clock = new THREE.Clock();
 const tempVector = new THREE.Vector3();
 const tempVectorB = new THREE.Vector3();
 const tempVectorC = new THREE.Vector3();
+const tempAvatarVertex = new THREE.Vector3();
+const tempAvatarMatrix = new THREE.Matrix4();
 const tempColor = new THREE.Color();
 const ENERGY_SURFACE_RADII = new Float32Array(TRACK_DEFINITIONS.map(({ id }) => ({
   body: 0.27,
@@ -434,7 +533,6 @@ function populateMovementSelector() {
   });
 
   ui.select.append(indexedGroup, modelFolderGroup);
-  ui.statusDetail.textContent = `10 SIGNALS · ${MOVEMENTS.length} MODELS`;
 }
 
 function populateSignalRows() {
@@ -487,6 +585,7 @@ function clearCurrentModel() {
   state.ready = false;
   energySurfaceUniforms.enabled.value = 0;
   energySurfaceUniforms.levels.value.fill(0);
+  clearAvatarRepresentations();
   if (state.root) {
     scene.remove(state.modelContainer ?? state.root);
     disposeObject(state.root);
@@ -643,6 +742,7 @@ function installEnergySurfaceShader(material) {
 function styleModel(root) {
   root.traverse((child) => {
     if (!child.isMesh) return;
+    child.userData.cyberSubinBaseVisible = child.visible;
     child.castShadow = true;
     child.receiveShadow = true;
     child.frustumCulled = false;
@@ -669,6 +769,237 @@ function styleModel(root) {
     });
     child.material = Array.isArray(child.material) ? styled : styled[0];
   });
+}
+
+function clearAvatarRepresentations() {
+  if (state.skeletonGroup) {
+    scene.remove(state.skeletonGroup);
+    disposeObject(state.skeletonGroup);
+  }
+  if (state.pointCloudGroup) {
+    scene.remove(state.pointCloudGroup);
+    disposeObject(state.pointCloudGroup);
+  }
+  state.skeletonGroup = null;
+  state.skeletonBones = [];
+  state.skeletonConnections = [];
+  state.skeletonLine = null;
+  state.skeletonLinePositions = null;
+  state.skeletonJoints = null;
+  state.pointCloudGroup = null;
+  state.pointCloudEntries = [];
+}
+
+function updateAvatarPointCloud() {
+  if (!state.pointCloudGroup?.visible) return;
+  for (const entry of state.pointCloudEntries) {
+    entry.source.updateWorldMatrix(true, false);
+    for (let pointIndex = 0; pointIndex < entry.vertexIndices.length; pointIndex += 1) {
+      entry.source.getVertexPosition(entry.vertexIndices[pointIndex], tempAvatarVertex);
+      tempAvatarVertex.applyMatrix4(entry.source.matrixWorld);
+      const offset = pointIndex * 3;
+      entry.positions[offset] = tempAvatarVertex.x;
+      entry.positions[offset + 1] = tempAvatarVertex.y;
+      entry.positions[offset + 2] = tempAvatarVertex.z;
+    }
+    entry.points.geometry.attributes.position.needsUpdate = true;
+  }
+}
+
+function updateAvatarSkeleton() {
+  if (!state.skeletonGroup?.visible || !state.skeletonLine || !state.skeletonJoints) return;
+  state.root?.updateMatrixWorld(true);
+
+  for (let index = 0; index < state.skeletonConnections.length; index += 1) {
+    const connection = state.skeletonConnections[index];
+    connection.parent.getWorldPosition(tempVector);
+    connection.child.getWorldPosition(tempVectorB);
+    const offset = index * 6;
+    state.skeletonLinePositions[offset] = tempVector.x;
+    state.skeletonLinePositions[offset + 1] = tempVector.y;
+    state.skeletonLinePositions[offset + 2] = tempVector.z;
+    state.skeletonLinePositions[offset + 3] = tempVectorB.x;
+    state.skeletonLinePositions[offset + 4] = tempVectorB.y;
+    state.skeletonLinePositions[offset + 5] = tempVectorB.z;
+  }
+  const linePositionAttribute = state.skeletonLine.geometry.attributes.instanceStart;
+  if (linePositionAttribute?.data) linePositionAttribute.data.needsUpdate = true;
+
+  for (let index = 0; index < state.skeletonBones.length; index += 1) {
+    state.skeletonBones[index].getWorldPosition(tempVector);
+    tempAvatarMatrix.makeTranslation(tempVector.x, tempVector.y, tempVector.z);
+    state.skeletonJoints.setMatrixAt(index, tempAvatarMatrix);
+  }
+  state.skeletonJoints.instanceMatrix.needsUpdate = true;
+}
+
+function createAvatarRepresentations(root) {
+  const sourceMeshes = [];
+  let totalVertices = 0;
+  root.traverse((child) => {
+    const position = child.isMesh ? child.geometry?.attributes?.position : null;
+    if (!position || child.userData.cyberSubinBaseVisible === false) return;
+    sourceMeshes.push(child);
+    totalVertices += position.count;
+  });
+
+  const stride = Math.max(1, Math.ceil(totalVertices / AVATAR_POINT_BUDGET));
+  const pointCloudGroup = new THREE.Group();
+  pointCloudGroup.name = 'CyberSubinAvatarPointCloud';
+  pointCloudGroup.visible = false;
+
+  state.pointCloudEntries = sourceMeshes.map((source) => {
+    const vertexCount = source.geometry.attributes.position.count;
+    const vertexIndices = [];
+    for (let index = 0; index < vertexCount; index += stride) vertexIndices.push(index);
+    const positions = new Float32Array(vertexIndices.length * 3);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const points = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({
+        color: AVATAR_COLORS[state.avatarColor],
+        size: EMBEDDED_VIEW ? 0.02 : 0.018,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.98,
+        depthWrite: false
+      })
+    );
+    points.frustumCulled = false;
+    points.renderOrder = 6;
+    pointCloudGroup.add(points);
+    return { source, vertexIndices, positions, points };
+  });
+  state.pointCloudGroup = pointCloudGroup;
+  scene.add(pointCloudGroup);
+
+  const skeletonBones = [];
+  root.traverse((child) => {
+    if (child.isBone) skeletonBones.push(child);
+  });
+  const skeletonConnections = skeletonBones
+    .filter((bone) => bone.parent?.isBone)
+    .map((bone) => ({ parent: bone.parent, child: bone }));
+  const skeletonLinePositions = new Float32Array(skeletonConnections.length * 6);
+  const skeletonLineGeometry = new LineSegmentsGeometry();
+  skeletonLineGeometry.setPositions(skeletonLinePositions);
+  skeletonLineGeometry.instanceCount = skeletonConnections.length;
+  const skeletonLine = new LineSegments2(
+    skeletonLineGeometry,
+    new LineMaterial({
+      color: AVATAR_COLORS[state.avatarColor],
+      linewidth: EMBEDDED_VIEW ? 3.2 : 4.8,
+      transparent: true,
+      opacity: 1,
+      depthTest: false,
+      depthWrite: false,
+      alphaToCoverage: true,
+      toneMapped: false
+    })
+  );
+  skeletonLine.frustumCulled = false;
+  skeletonLine.renderOrder = 18;
+
+  const skeletonJoints = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(EMBEDDED_VIEW ? 0.027 : 0.034, 14, 12),
+    new THREE.MeshBasicMaterial({
+      color: AVATAR_COLORS[state.avatarColor],
+      transparent: true,
+      opacity: 1,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false
+    }),
+    skeletonBones.length
+  );
+  skeletonJoints.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  skeletonJoints.frustumCulled = false;
+  skeletonJoints.renderOrder = 19;
+
+  const skeletonGroup = new THREE.Group();
+  skeletonGroup.name = 'CyberSubinAvatarSkeleton';
+  skeletonGroup.add(skeletonLine, skeletonJoints);
+  skeletonGroup.visible = false;
+  state.skeletonGroup = skeletonGroup;
+  state.skeletonBones = skeletonBones;
+  state.skeletonConnections = skeletonConnections;
+  state.skeletonLine = skeletonLine;
+  state.skeletonLinePositions = skeletonLinePositions;
+  state.skeletonJoints = skeletonJoints;
+  scene.add(skeletonGroup);
+}
+
+function applyAvatarAppearance() {
+  const avatarColor = AVATAR_COLORS[state.avatarColor] ?? AVATAR_COLORS.pearl;
+  const showMesh = ['smooth', 'rough'].includes(state.surfaceMode);
+  state.root?.traverse((child) => {
+    if (!child.isMesh) return;
+    child.visible = showMesh && child.userData.cyberSubinBaseVisible !== false;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) {
+      material.color?.set(avatarColor);
+      if ('roughness' in material) material.roughness = state.surfaceMode === 'rough' ? 0.96 : 0.38;
+      if ('metalness' in material) material.metalness = state.surfaceMode === 'rough' ? 0.01 : 0.14;
+      if ('flatShading' in material) material.flatShading = state.surfaceMode === 'rough';
+      if ('emissive' in material) {
+        material.emissive.set(state.surfaceMode === 'rough' ? '#030506' : '#071012');
+        material.emissiveIntensity = state.surfaceMode === 'rough' ? 0.05 : 0.18;
+      }
+      material.needsUpdate = true;
+    }
+  });
+
+  if (state.pointCloudGroup) state.pointCloudGroup.visible = state.surfaceMode === 'points';
+  for (const entry of state.pointCloudEntries) entry.points.material.color.set(avatarColor);
+  if (state.skeletonGroup) {
+    state.skeletonGroup.visible = state.surfaceMode === 'skeleton';
+    state.skeletonLine?.material.color.set(avatarColor);
+    state.skeletonJoints?.material.color.set(avatarColor);
+  }
+  if (state.surfaceMode === 'points') updateAvatarPointCloud();
+  if (state.surfaceMode === 'skeleton') updateAvatarSkeleton();
+}
+
+function setAvatarStyleOpen(open) {
+  state.avatarStyleOpen = open;
+  ui.avatarStyleToggle.setAttribute('aria-expanded', String(open));
+  ui.avatarStyleStatus.textContent = open ? 'HIDE' : 'SHOW';
+  ui.avatarStylePanel.hidden = !open;
+}
+
+function setAvatarColor(color, activeButton) {
+  if (!(color in AVATAR_COLORS)) return;
+  state.avatarColor = color;
+  ui.avatarColorButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
+  applyAvatarAppearance();
+}
+
+function setAvatarSurface(surface, activeButton) {
+  if (!['smooth', 'rough', 'points', 'skeleton'].includes(surface)) return;
+  state.surfaceMode = surface;
+  ui.avatarSurfaceButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
+  applyAvatarAppearance();
+}
+
+function setLightingPreset(name, activeButton) {
+  const preset = LIGHTING_PRESETS[name];
+  if (!preset) return;
+  state.lightingPreset = name;
+  ambient.color.set(preset.hemisphere[0]);
+  ambient.groundColor.set(preset.hemisphere[1]);
+  ambient.intensity = preset.hemisphere[2];
+  keyLight.color.set(preset.key[0]);
+  keyLight.intensity = preset.key[1];
+  keyLight.position.fromArray(preset.key[2]);
+  rimLight.color.set(preset.rim[0]);
+  rimLight.intensity = preset.rim[1];
+  rimLight.position.fromArray(preset.rim[2]);
+  fillLight.color.set(preset.fill[0]);
+  fillLight.intensity = preset.fill[1];
+  fillLight.position.fromArray(preset.fill[2]);
+  renderer.toneMappingExposure = preset.exposure;
+  ui.lightingPresetButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
 }
 
 function normalizeModel(root) {
@@ -707,8 +1038,8 @@ function createTrackers() {
     analysisObjects.add(marker);
 
     const trailGeometry = new LineSegmentsGeometry();
-    const trailLinePositions = new Float32Array((TRAIL_RENDER_LENGTH - 1) * 6);
-    const trailLineColors = new Float32Array((TRAIL_RENDER_LENGTH - 1) * 6);
+    const trailLinePositions = new Float32Array(TRAIL_INITIAL_RENDER_CAPACITY * 6);
+    const trailLineColors = new Float32Array(TRAIL_INITIAL_RENDER_CAPACITY * 6);
     trailGeometry.setPositions(trailLinePositions);
     trailGeometry.setColors(trailLineColors);
     trailGeometry.instanceCount = 0;
@@ -730,8 +1061,8 @@ function createTrackers() {
     analysisObjects.add(trail);
 
     const trailDotsGeometry = new THREE.BufferGeometry();
-    const trailPointPositions = new Float32Array(TRAIL_LENGTH * 3);
-    const trailPointColors = new Float32Array(TRAIL_LENGTH * 3);
+    const trailPointPositions = new Float32Array(TRAIL_INITIAL_CAPACITY * 3);
+    const trailPointColors = new Float32Array(TRAIL_INITIAL_CAPACITY * 3);
     trailDotsGeometry.setAttribute('position', new THREE.BufferAttribute(trailPointPositions, 3));
     trailDotsGeometry.setAttribute('color', new THREE.BufferAttribute(trailPointColors, 3));
     trailDotsGeometry.setDrawRange(0, 0);
@@ -764,8 +1095,10 @@ function createTrackers() {
       trailPoints: [],
       trailLinePositions,
       trailLineColors,
+      trailLineCapacity: TRAIL_INITIAL_RENDER_CAPACITY,
       trailPointPositions,
       trailPointColors,
+      trailPointCapacity: TRAIL_INITIAL_CAPACITY,
       hasTrailPoint: false,
       history: Object.fromEntries(GRAPH_SERIES.map(({ key }) => [key, new Array(SIGNAL_WINDOW).fill(0)])),
       position: new THREE.Vector3(),
@@ -833,6 +1166,132 @@ function toggleExperiment(key) {
   else if (state.activeExperiments.has(key)) state.activeExperiments.delete(key);
   else if (EXPERIMENT_INFO[key]) state.activeExperiments.add(key);
   updateExperimentVisibility();
+}
+
+function setExperimentModes(keys) {
+  state.activeExperiments.clear();
+  for (const key of keys) {
+    if (EXPERIMENT_INFO[key]) state.activeExperiments.add(key);
+  }
+  updateExperimentVisibility();
+}
+
+function setExperimentMode(key) {
+  setExperimentModes(key === 'all' ? EXPERIMENT_KEYS : [key]);
+
+  if (EMBEDDED_VIEW) {
+    const urlState = new URL(window.location.href);
+    urlState.searchParams.set('effect', EXPERIMENT_INFO[key] || key === 'all' ? key : 'off');
+    window.history.replaceState({}, '', urlState);
+  }
+}
+
+function getGridEffectValue(experiments) {
+  if (!experiments.length) return 'off';
+  if (experiments.length === EXPERIMENT_KEYS.length) return 'all';
+  if (experiments.length === 1) return experiments[0];
+  return 'custom';
+}
+
+function applyViewState(view) {
+  if (!view || typeof view !== 'object') return;
+  if (Array.isArray(view.experiments)) setExperimentModes(view.experiments);
+  if (view.avatarColor) {
+    setAvatarColor(view.avatarColor, ui.avatarColorButtons.find((button) => button.dataset.avatarColor === view.avatarColor));
+  }
+  if (view.surfaceMode) {
+    setAvatarSurface(view.surfaceMode, ui.avatarSurfaceButtons.find((button) => button.dataset.avatarSurface === view.surfaceMode));
+  }
+  if (view.lightingPreset) {
+    setLightingPreset(view.lightingPreset, ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === view.lightingPreset));
+  }
+  if (typeof view.traceVisible === 'boolean') setTraceVisibility(view.traceVisible);
+  if (typeof view.bodyPointsVisible === 'boolean') setBodyPointsVisibility(view.bodyPointsVisible);
+  if (view.traceMode) setTraceMode(view.traceMode, ui.traceModeButtons.find((button) => button.dataset.traceMode === view.traceMode));
+  if (Number.isFinite(Number(view.traceWidth))) {
+    const width = Number(view.traceWidth);
+    setTraceWidth(width, ui.traceWidthButtons.find((button) => Number(button.dataset.traceWidth) === width));
+  }
+  if (typeof view.traceDots === 'boolean') {
+    setTraceDots(view.traceDots, ui.traceDotButtons.find((button) => button.dataset.traceDots === String(view.traceDots)));
+  }
+  if (typeof view.traceSmoothing === 'boolean') {
+    setTraceSmoothing(view.traceSmoothing, ui.traceSmoothingButtons.find((button) => button.dataset.traceSmoothing === String(view.traceSmoothing)));
+  }
+  if (Number.isFinite(Number(view.traceSampleRate))) {
+    const rate = Number(view.traceSampleRate);
+    setTraceSampleRate(rate, ui.traceSampleRateButtons.find((button) => Number(button.dataset.traceSampleRate) === rate));
+  }
+  if (view.floorLight) setFloorLight(view.floorLight, ui.floorLightButtons.find((button) => button.dataset.floorLight === view.floorLight));
+  if (Number.isFinite(Number(view.avatarOffsetX)) && Number.isFinite(Number(view.avatarOffsetY))) {
+    setAvatarPosition(Number(view.avatarOffsetX), Number(view.avatarOffsetY));
+  }
+  if (Number.isFinite(Number(view.cameraOrbitSpeed))) {
+    const speed = Number(view.cameraOrbitSpeed);
+    setCameraOrbitSpeed(speed, ui.cameraSpeedButtons.find((button) => Number(button.dataset.cameraSpeed) === speed));
+  }
+  if ([1, -1].includes(Number(view.cameraOrbitDirection))) {
+    const direction = Number(view.cameraOrbitDirection);
+    setCameraOrbitDirection(direction, ui.cameraDirectionButtons.find((button) => Number(button.dataset.cameraDirection) === direction));
+  }
+  if (typeof view.cameraOrbit === 'boolean') setCameraOrbit(view.cameraOrbit);
+  if (Array.isArray(view.cameraPosition) && view.cameraPosition.length === 3) camera.position.fromArray(view.cameraPosition);
+  if (Array.isArray(view.cameraTarget) && view.cameraTarget.length === 3) controls.target.fromArray(view.cameraTarget);
+  controls.update();
+  if (typeof view.analysisVisible === 'boolean') setAnalysisVisibility(view.analysisVisible);
+  if (Number.isFinite(Number(view.analysisWidth))) setAnalysisWidth(Number(view.analysisWidth));
+  if (view.graphMode) setGraphMode(view.graphMode, ui.graphModeButtons.find((button) => button.dataset.graphMode === view.graphMode));
+}
+
+function persistFocusedGridState() {
+  if (!RETURN_TO_GRID) return;
+  try {
+    const storedGridState = JSON.parse(window.sessionStorage.getItem(GRID_STATE_KEY));
+    const focusedIndex = Number(storedGridState?.focusedIndex);
+    if (!Array.isArray(storedGridState?.cells) || !Number.isInteger(focusedIndex) || focusedIndex < 0 || focusedIndex >= 6) return;
+
+    const experiments = EXPERIMENT_KEYS.filter((key) => state.activeExperiments.has(key));
+    const currentTime = Math.max(0, (state.action?.time ?? state.clipStart) - state.clipStart);
+    const duration = Math.max(0, state.duration - state.clipStart);
+    storedGridState.cells[focusedIndex] = {
+      ...storedGridState.cells[focusedIndex],
+      movement: MOVEMENTS[state.movementIndex]?.id ?? storedGridState.cells[focusedIndex].movement,
+      effect: getGridEffectValue(experiments),
+      effects: experiments,
+      view: {
+        experiments,
+        avatarColor: state.avatarColor,
+        surfaceMode: state.surfaceMode,
+        lightingPreset: state.lightingPreset,
+        traceVisible: state.traceVisible,
+        bodyPointsVisible: state.bodyPointsVisible,
+        traceMode: state.traceMode,
+        traceWidth: state.traceWidth,
+        traceDots: state.traceDots,
+        traceSmoothing: state.traceSmoothing,
+        traceSampleRate: state.traceSampleRate,
+        floorLight: state.floorLight,
+        avatarOffsetX: state.avatarOffsetX,
+        avatarOffsetY: state.avatarOffsetY,
+        cameraOrbit: state.cameraOrbit,
+        cameraOrbitSpeed: state.cameraOrbitSpeed,
+        cameraOrbitDirection: state.cameraOrbitDirection,
+        cameraPosition: camera.position.toArray(),
+        cameraTarget: controls.target.toArray(),
+        analysisVisible: state.analysisVisible,
+        analysisWidth: state.analysisWidth,
+        graphMode: state.graphMode
+      }
+    };
+    storedGridState.transport = {
+      playing: state.playing,
+      speed: state.speed,
+      progress: duration ? currentTime / duration : 0
+    };
+    window.sessionStorage.setItem(GRID_STATE_KEY, JSON.stringify(storedGridState));
+  } catch {
+    // Returning still works if temporary browser storage is unavailable.
+  }
 }
 
 function createExperimentalVisuals() {
@@ -2008,10 +2467,45 @@ function createSmoothedTrailPoints(visiblePoints) {
     segmentStart = segmentEnd;
   }
 
-  return renderedPoints.slice(-TRAIL_RENDER_LENGTH);
+  return renderedPoints;
+}
+
+function growTrailCapacity(currentCapacity, requiredCapacity) {
+  let capacity = Math.max(2, currentCapacity);
+  while (capacity < requiredCapacity) capacity *= 2;
+  return capacity;
+}
+
+function ensureTrailGeometryCapacity(tracker, pointCount, lineSegmentCount) {
+  if (pointCount > tracker.trailPointCapacity) {
+    tracker.trailPointCapacity = growTrailCapacity(tracker.trailPointCapacity, pointCount);
+    tracker.trailPointPositions = new Float32Array(tracker.trailPointCapacity * 3);
+    tracker.trailPointColors = new Float32Array(tracker.trailPointCapacity * 3);
+    tracker.trailDots.geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(tracker.trailPointPositions, 3)
+    );
+    tracker.trailDots.geometry.setAttribute(
+      'color',
+      new THREE.BufferAttribute(tracker.trailPointColors, 3)
+    );
+  }
+
+  if (lineSegmentCount > tracker.trailLineCapacity) {
+    tracker.trailLineCapacity = growTrailCapacity(tracker.trailLineCapacity, lineSegmentCount);
+    tracker.trailLinePositions = new Float32Array(tracker.trailLineCapacity * 6);
+    tracker.trailLineColors = new Float32Array(tracker.trailLineCapacity * 6);
+    const expandedGeometry = new LineSegmentsGeometry();
+    expandedGeometry.setPositions(tracker.trailLinePositions);
+    expandedGeometry.setColors(tracker.trailLineColors);
+    expandedGeometry.instanceCount = 0;
+    tracker.trail.geometry.dispose();
+    tracker.trail.geometry = expandedGeometry;
+  }
 }
 
 function updateTrailGeometry(tracker) {
+  if (!state.traceVisible) return;
   const durationSeconds = TRACE_DURATION_SECONDS[state.traceMode];
   const pointLimit = Number.isFinite(durationSeconds)
     ? Math.max(2, Math.round(durationSeconds * state.traceSampleRate))
@@ -2020,6 +2514,11 @@ function updateTrailGeometry(tracker) {
     ? tracker.trailPoints.slice(-pointLimit)
     : tracker.trailPoints;
   const renderedLinePoints = createSmoothedTrailPoints(visiblePoints);
+  ensureTrailGeometryCapacity(
+    tracker,
+    visiblePoints.length,
+    Math.max(0, renderedLinePoints.length - 1)
+  );
   const shouldFade = state.traceMode !== 'permanent';
   const pointDenominator = Math.max(1, visiblePoints.length - 1);
   const lineDenominator = Math.max(1, renderedLinePoints.length - 1);
@@ -2072,7 +2571,7 @@ function appendTrailPoint(tracker, point, connectToPrevious = true, refreshGeome
     point: point.clone(),
     connect: connectToPrevious && tracker.hasTrailPoint
   });
-  if (tracker.trailPoints.length > TRAIL_LENGTH) {
+  if (state.traceMode !== 'permanent' && tracker.trailPoints.length > TRAIL_INITIAL_CAPACITY) {
     tracker.trailPoints.shift();
     if (tracker.trailPoints[0]) tracker.trailPoints[0].connect = false;
   }
@@ -2119,7 +2618,14 @@ function resetTrackerSamples({ preserveTrails = false } = {}) {
 function applyAvatarScreenOffset() {
   const width = Math.max(1, ui.sceneWrap.clientWidth);
   const height = Math.max(1, ui.sceneWrap.clientHeight);
-  const screenX = (state.avatarOffsetX / 2.4) * width * 0.32;
+  const analysisInset = !EMBEDDED_VIEW
+    && state.analysisVisible
+    && !document.body.classList.contains('interface-hidden')
+    && window.innerWidth > 860
+    ? Math.min(state.analysisWidth, width * 0.72)
+    : 0;
+  const analysisCenterShift = -analysisInset / 2;
+  const screenX = (state.avatarOffsetX / 2.4) * width * 0.32 + analysisCenterShift;
   const screenY = (state.avatarOffsetY / 1.8) * height * 0.28;
 
   if (Math.abs(screenX) < 0.01 && Math.abs(screenY) < 0.01) {
@@ -2179,6 +2685,8 @@ function prepareModel(gltf, movement) {
   state.bones = indexBones(root);
   state.lastClipTime = clipStart;
   centerCharacter();
+  createAvatarRepresentations(root);
+  applyAvatarAppearance();
   createTrackers();
   resetTrackerSamples();
   createExperimentalVisuals();
@@ -2189,10 +2697,29 @@ function prepareModel(gltf, movement) {
   ui.timeline.value = String(clipStart);
   const playableDuration = Math.max(0, clip.duration - clipStart);
   ui.totalTime.textContent = formatTime(playableDuration);
-  ui.statusDetail.textContent = `${state.trackers.filter((tracker) => tracker.trackedBones.length).length} SIGNALS · ${state.bones.size} NODES`;
   state.ready = true;
   setPlaying(true);
+
+  if (state.initialViewStatePending) {
+    state.initialViewStatePending = false;
+    applyViewState(REQUESTED_GRID_CELL_STATE.view);
+  }
+
+  if (state.initialTransportPending) {
+    state.initialTransportPending = false;
+    if (Number.isFinite(REQUESTED_PROGRESS)) seekToProgress(REQUESTED_PROGRESS);
+    if (REQUESTED_PLAYING !== null) setPlaying(REQUESTED_PLAYING);
+  }
+
   hideLoading();
+
+  if (EMBEDDED_VIEW) {
+    window.parent.postMessage({
+      source: 'cyber-subin-avatar',
+      type: 'ready',
+      movementId: movement.id
+    }, window.location.origin);
+  }
 }
 
 function loadModel(movementIndex) {
@@ -2201,6 +2728,15 @@ function loadModel(movementIndex) {
 
   state.movementIndex = movementIndex;
   ui.select.value = movement.id;
+  if (RETURN_TO_GRID) {
+    ui.gridViewLink.textContent = 'GRID VIEW';
+    ui.gridViewLink.setAttribute('aria-label', 'Return to the six-avatar grid');
+    ui.gridViewLink.href = '/grid.html?restore=1';
+  } else {
+    ui.gridViewLink.textContent = 'GRID VIEW';
+    ui.gridViewLink.removeAttribute('aria-label');
+    ui.gridViewLink.href = `/grid.html?movement=${encodeURIComponent(movement.id)}`;
+  }
   updateMovementInformation(movement);
   setLoading();
   const token = ++state.loadToken;
@@ -2247,6 +2783,26 @@ function setPlaying(playing) {
   state.playing = playing;
   ui.playButton.classList.toggle('paused', !playing);
   ui.playButton.setAttribute('aria-label', playing ? 'Pause animation' : 'Play animation');
+}
+
+function setPlaybackSpeed(speed) {
+  if (!Number.isFinite(speed) || speed <= 0) return;
+  state.speed = speed;
+  ui.speedButtons.forEach((button) => {
+    button.classList.toggle('active', Number(button.dataset.speed) === speed);
+  });
+}
+
+function seekToProgress(progress) {
+  if (!state.action || !state.mixer) return;
+  const normalizedProgress = THREE.MathUtils.clamp(Number(progress) || 0, 0, 1);
+  const playableDuration = Math.max(0, state.duration - state.clipStart);
+  state.action.time = state.clipStart + playableDuration * normalizedProgress;
+  state.mixer.update(0);
+  state.lastClipTime = state.action.time;
+  centerCharacter();
+  resetTrackerSamples({ preserveTrails: true });
+  updateMotionSignals(1 / 30, false, false);
 }
 
 function setCameraOrbit(enabled) {
@@ -2302,6 +2858,8 @@ function setAvatarPosition(nextX, nextY) {
   }
 
   applyAvatarScreenOffset();
+  if (state.surfaceMode === 'points') updateAvatarPointCloud();
+  if (state.surfaceMode === 'skeleton') updateAvatarSkeleton();
 
   const formatOffset = (value) => `${value >= 0 ? '+' : ''}${value.toFixed(1)}`;
   ui.avatarPositionReadout.textContent = `X ${formatOffset(clampedX)} · Y ${formatOffset(clampedY)}`;
@@ -2329,9 +2887,10 @@ function setTraceVisibility(visible) {
     button.classList.toggle('active', button.dataset.traceVisible === String(visible));
   });
   ui.lineDisplayToggle.setAttribute('aria-pressed', String(visible));
-  ui.lineDisplayToggle.setAttribute('aria-label', visible ? 'Turn line display off' : 'Turn line display on');
+  ui.lineDisplayToggle.setAttribute('aria-label', visible ? 'Turn trace display off' : 'Turn trace display on');
   ui.lineDisplayStatus.textContent = visible ? 'ON' : 'OFF';
   state.trackers.forEach((tracker) => {
+    if (visible) updateTrailGeometry(tracker);
     tracker.trail.visible = visible;
     tracker.trailDots.visible = visible && state.traceDots;
   });
@@ -2394,6 +2953,21 @@ function setLineControlsOpen(open) {
   ui.lineControlsPanel.hidden = !open;
 }
 
+function setInterfaceHidden(hidden) {
+  document.body.classList.toggle('interface-hidden', hidden);
+  ui.hideAllUi.textContent = hidden ? 'SHOW ALL' : 'HIDE ALL';
+  ui.hideAllUi.setAttribute('aria-pressed', String(hidden));
+  ui.hideAllUi.setAttribute('aria-label', hidden ? 'Show all interface controls' : 'Hide all interface controls');
+  requestAnimationFrame(resize);
+}
+
+function setControlButtonsHidden(hidden) {
+  document.body.classList.toggle('controls-hidden', hidden);
+  ui.hideControlButtons.textContent = hidden ? 'SHOW BUTTONS' : 'HIDE BUTTONS';
+  ui.hideControlButtons.setAttribute('aria-pressed', String(hidden));
+  ui.hideControlButtons.setAttribute('aria-label', hidden ? 'Show interface control buttons' : 'Hide interface control buttons');
+}
+
 function setVisualizationMenu(open) {
   state.visualizationMenuOpen = open;
   ui.visualizationMenuToggle.setAttribute('aria-expanded', String(open));
@@ -2411,6 +2985,22 @@ function setAnalysisWidth(width) {
   ui.appShell.style.setProperty('--analysis-width', `${state.analysisWidth}px`);
   ui.analysisResizer.setAttribute('aria-valuenow', String(Math.round(state.analysisWidth)));
   ui.analysisResizer.setAttribute('aria-valuemax', String(Math.round(maximum)));
+  applyAvatarScreenOffset();
+}
+
+function setAnalysisVisibility(visible) {
+  state.analysisVisible = visible;
+  ui.analysisPanel.hidden = !visible;
+  ui.analysisPanelToggle.setAttribute('aria-expanded', String(visible));
+  ui.analysisPanelStatus.textContent = visible ? 'HIDE' : 'SHOW';
+  ui.appShell.classList.toggle('analysis-hidden', !visible);
+
+  if (!visible && state.panelResizing) {
+    state.panelResizing = false;
+    document.body.classList.remove('resizing-panel');
+  }
+
+  requestAnimationFrame(resize);
 }
 
 function setTraceWidth(width, activeButton) {
@@ -2585,7 +3175,7 @@ function drawSignalCharts() {
 function resize() {
   const width = ui.sceneWrap.clientWidth;
   const height = ui.sceneWrap.clientHeight;
-  const pixelRatio = Math.min(window.devicePixelRatio, 2);
+  const pixelRatio = Math.min(window.devicePixelRatio, EMBEDDED_VIEW ? 1.25 : 2);
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   camera.aspect = width / Math.max(1, height);
@@ -2605,6 +3195,25 @@ function updateTransport() {
   ui.timeline.style.setProperty('--progress', `${progress}%`);
 }
 
+function notifyEmbeddedTransport(delta) {
+  if (!EMBEDDED_VIEW || !state.ready) return;
+  state.embeddedTransportElapsed += delta;
+  if (state.embeddedTransportElapsed < 0.1) return;
+  state.embeddedTransportElapsed = 0;
+
+  const currentTime = Math.max(0, (state.action?.time ?? state.clipStart) - state.clipStart);
+  const duration = Math.max(0, state.duration - state.clipStart);
+  window.parent.postMessage({
+    source: 'cyber-subin-avatar',
+    type: 'transport',
+    currentTime,
+    duration,
+    progress: duration ? currentTime / duration : 0,
+    playing: state.playing,
+    speed: state.speed
+  }, window.location.origin);
+}
+
 function animate() {
   const rawDelta = Math.min(clock.getDelta(), 0.08);
 
@@ -2620,7 +3229,7 @@ function animate() {
       state.lastClipTime = clipTime;
     }
     centerCharacter();
-    if (looped) resetTrackerSamples();
+    if (looped) resetTrackerSamples({ preserveTrails: true });
 
     state.sampleElapsed += rawDelta;
     const trailElapsedBeforeFrame = state.trailElapsed;
@@ -2643,9 +3252,12 @@ function animate() {
   }
 
   controls.update(rawDelta);
+  if (state.ready && state.surfaceMode === 'points') updateAvatarPointCloud();
+  if (state.ready && state.surfaceMode === 'skeleton') updateAvatarSkeleton();
   updateTransport();
-  drawSignalCharts();
+  if (!EMBEDDED_VIEW) drawSignalCharts();
   renderer.render(scene, camera);
+  notifyEmbeddedTransport(rawDelta);
 }
 
 ui.select.addEventListener('change', () => {
@@ -2655,6 +3267,7 @@ ui.select.addEventListener('change', () => {
 ui.playButton.addEventListener('click', () => setPlaying(!state.playing));
 ui.resetButton.addEventListener('click', resetExperience);
 ui.sceneWrap.addEventListener('dblclick', fitCamera);
+ui.avatarStyleToggle.addEventListener('click', () => setAvatarStyleOpen(!state.avatarStyleOpen));
 ui.cameraOrbitToggle.addEventListener('click', () => setCameraOrbit(!state.cameraOrbit));
 ui.cameraControlsToggle.addEventListener('click', () => setCameraControlsOpen(!state.cameraControlsOpen));
 ui.lineControlsToggle.addEventListener('click', () => setLineControlsOpen(!state.lineControlsOpen));
@@ -2671,10 +3284,19 @@ ui.timeline.addEventListener('input', () => {
 });
 
 for (const button of ui.speedButtons) {
-  button.addEventListener('click', () => {
-    state.speed = Number(button.dataset.speed);
-    ui.speedButtons.forEach((candidate) => candidate.classList.toggle('active', candidate === button));
-  });
+  button.addEventListener('click', () => setPlaybackSpeed(Number(button.dataset.speed)));
+}
+
+for (const button of ui.avatarColorButtons) {
+  button.addEventListener('click', () => setAvatarColor(button.dataset.avatarColor, button));
+}
+
+for (const button of ui.avatarSurfaceButtons) {
+  button.addEventListener('click', () => setAvatarSurface(button.dataset.avatarSurface, button));
+}
+
+for (const button of ui.lightingPresetButtons) {
+  button.addEventListener('click', () => setLightingPreset(button.dataset.lightingPreset, button));
 }
 
 for (const button of ui.cameraSpeedButtons) {
@@ -2727,6 +3349,39 @@ for (const button of ui.floorLightButtons) {
 for (const button of ui.traceSampleRateButtons) {
   button.addEventListener('click', () => setTraceSampleRate(Number(button.dataset.traceSampleRate), button));
 }
+
+if (EMBEDDED_VIEW) {
+  window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin || event.source !== window.parent) return;
+    if (event.data?.source !== 'cyber-subin-grid') return;
+
+    if (event.data.action === 'movement') {
+      const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === event.data.value);
+      if (movementIndex >= 0) loadModel(movementIndex);
+    } else if (event.data.action === 'effect') {
+      setExperimentMode(event.data.value);
+    } else if (event.data.action === 'restart') {
+      resetExperience();
+    } else if (event.data.action === 'speed') {
+      setPlaybackSpeed(Number(event.data.value));
+    } else if (event.data.action === 'playing') {
+      setPlaying(Boolean(event.data.value));
+    } else if (event.data.action === 'seek') {
+      seekToProgress(event.data.value);
+    } else if (event.data.action === 'viewState') {
+      applyViewState(event.data.value);
+    }
+  });
+}
+
+if (RETURN_TO_GRID) {
+  ui.gridViewLink.addEventListener('click', persistFocusedGridState);
+  window.addEventListener('pagehide', persistFocusedGridState);
+}
+
+ui.analysisPanelToggle.addEventListener('click', () => setAnalysisVisibility(!state.analysisVisible));
+ui.hideControlButtons.addEventListener('click', () => setControlButtonsHidden(!document.body.classList.contains('controls-hidden')));
+ui.hideAllUi.addEventListener('click', () => setInterfaceHidden(!document.body.classList.contains('interface-hidden')));
 
 ui.analysisResizer.addEventListener('pointerdown', (event) => {
   if (window.innerWidth <= 860) return;
@@ -2807,15 +3462,28 @@ populateMovementSelector();
 populateSignalRows();
 setGraphMode('all', ui.graphModeButtons.find((button) => button.dataset.graphMode === 'all'));
 setFloorLight('off', ui.floorLightButtons.find((button) => button.dataset.floorLight === 'off'));
-setTraceSampleRate(20, ui.traceSampleRateButtons.find((button) => button.dataset.traceSampleRate === '20'));
+setTraceMode('permanent', ui.traceModeButtons.find((button) => button.dataset.traceMode === 'permanent'));
+setTraceDots(false, ui.traceDotButtons.find((button) => button.dataset.traceDots === 'false'));
+setTraceSmoothing(true, ui.traceSmoothingButtons.find((button) => button.dataset.traceSmoothing === 'true'));
+setTraceSampleRate(240, ui.traceSampleRateButtons.find((button) => button.dataset.traceSampleRate === '240'));
+setAvatarStyleOpen(false);
+setAvatarColor('pearl', ui.avatarColorButtons.find((button) => button.dataset.avatarColor === 'pearl'));
+setAvatarSurface('smooth', ui.avatarSurfaceButtons.find((button) => button.dataset.avatarSurface === 'smooth'));
+setLightingPreset('studio', ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === 'studio'));
 setCameraControlsOpen(false);
 setLineControlsOpen(false);
 setVisualizationMenu(false);
+setTraceVisibility(false);
+setBodyPointsVisibility(false);
 setAnalysisWidth(390);
+setAnalysisVisibility(true);
 fitCamera();
 resize();
 renderer.setAnimationLoop(animate);
 
-const requestedMovement = new URLSearchParams(window.location.search).get('movement');
+const requestedEffect = PAGE_PARAMS.get('effect');
+if (PAGE_PARAMS.has('effect')) setExperimentMode(requestedEffect);
+if (Number.isFinite(REQUESTED_SPEED) && REQUESTED_SPEED > 0) setPlaybackSpeed(REQUESTED_SPEED);
+const requestedMovement = PAGE_PARAMS.get('movement');
 const requestedIndex = MOVEMENTS.findIndex((movement) => movement.id === requestedMovement);
 loadModel(requestedIndex >= 0 ? requestedIndex : 0);
