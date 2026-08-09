@@ -67,3 +67,7 @@ Build the static site with `pnpm build`. The existing `glb-optim/` directory is 
 - `R` resets the camera and animation
 - Double-click the viewer to reset the camera
 - `C` toggles automatic camera orbit
+
+## License
+
+This project is available under the [MIT License](LICENSE).
