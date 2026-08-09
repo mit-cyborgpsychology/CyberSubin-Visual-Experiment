@@ -8,17 +8,23 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
+import {
+  createExternalSpacePointCloud,
+  updateExternalSpacePointCloud
+} from './external-space.js';
+import { readViewStateFromParams, writeViewStateToParams } from './view-url.js';
 import { posture } from '../59.ts';
 import './styles.css';
 
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const GRID_STATE_KEY = 'cyber-subin-six-avatar-state';
 const EMBEDDED_VIEW = PAGE_PARAMS.get('embedded') === '1';
+const EMBEDDED_TRANSPORT_SOURCE = !EMBEDDED_VIEW || PAGE_PARAMS.get('transport') !== '0';
 const RETURN_TO_GRID = PAGE_PARAMS.get('from') === 'grid';
 const REQUESTED_PROGRESS = PAGE_PARAMS.has('progress') ? Number(PAGE_PARAMS.get('progress')) : null;
 const REQUESTED_PLAYING = PAGE_PARAMS.has('playing') ? PAGE_PARAMS.get('playing') !== 'false' : null;
 const REQUESTED_SPEED = PAGE_PARAMS.has('speed') ? Number(PAGE_PARAMS.get('speed')) : null;
+const REQUESTED_URL_VIEW_STATE = readViewStateFromParams(PAGE_PARAMS);
 let REQUESTED_GRID_CELL_STATE = null;
 if (RETURN_TO_GRID) {
   try {
@@ -34,11 +40,22 @@ if (RETURN_TO_GRID) {
 document.body.classList.toggle('embedded-view', EMBEDDED_VIEW);
 
 const DISPLAY_HEIGHT = 3;
+const DEFAULT_CAMERA_OFFSET = new THREE.Vector3(4.65, 1.07, 7.25);
+const DEFAULT_CAMERA_DIRECTION = DEFAULT_CAMERA_OFFSET.clone().normalize();
+const EMBEDDED_CAMERA_DISTANCE = new THREE.Vector3(2.15, 0.88, 6.15).length();
+const EMBEDDED_CAMERA_OFFSET = DEFAULT_CAMERA_DIRECTION.clone().multiplyScalar(EMBEDDED_CAMERA_DISTANCE);
 const SIGNAL_WINDOW = 270;
-const TRAIL_INITIAL_CAPACITY = 4096;
+const TRAIL_INITIAL_CAPACITY = EMBEDDED_VIEW ? 256 : 4096;
 const TRAIL_INITIAL_RENDER_CAPACITY = TRAIL_INITIAL_CAPACITY * 2;
+const FADING_TRAIL_RETENTION_LIMIT = 4096;
 const CURVE_HISTORY_LENGTH = 108;
 const MODEL_COUNT = 59;
+const DEFAULT_MOVEMENT_ID = '59';
+const DEFAULT_SPEED = 3;
+const DEFAULT_AVATAR_COLOR = 'lightGrey';
+const DEFAULT_SURFACE_MODE = 'smooth';
+const DEFAULT_LIGHTING_PRESET = 'top';
+const DEFAULT_LIGHTING_COLOR = 'cool';
 const TRACE_DURATION_SECONDS = {
   permanent: Infinity,
   long: 15,
@@ -48,10 +65,10 @@ const TRACE_DURATION_SECONDS = {
   instant: 1
 };
 const FLOOR_LIGHT_LEVELS = {
-  off: { color: 0x000000, gridOpacity: 0.2, ringOpacity: 0.04 },
-  low: { color: 0x020303, gridOpacity: 0.3, ringOpacity: 0.065 },
-  medium: { color: 0x050708, gridOpacity: 0.42, ringOpacity: 0.1 },
-  high: { color: 0x162226, gridOpacity: 0.9, ringOpacity: 0.34 }
+  off: { color: 0x000000 },
+  low: { color: 0x020303 },
+  medium: { color: 0x050708 },
+  high: { color: 0x162226 }
 };
 const AVATAR_COLORS = {
   pearl: '#c7c9c5',
@@ -61,44 +78,112 @@ const AVATAR_COLORS = {
   magenta: '#ff4fbc',
   gold: '#e7ad4f',
   lime: '#a8ff3e',
-  coral: '#ff6f61'
+  coral: '#ff6f61',
+  black: '#111315',
+  darkGrey: '#34383d',
+  grey: '#7a8085',
+  lightGrey: '#d9dcde'
 };
 const LIGHTING_PRESETS = {
   studio: {
-    hemisphere: ['#d9f8ff', '#07080b', 2.4],
-    key: ['#fff5e8', 3.7, [4.5, 7, 5]],
-    rim: ['#65f3ff', 3.2, [-4, 3.5, -4]],
-    fill: ['#a98bff', 1.15, [4, 1.5, -3]],
+    hemisphere: ['#d8dde0', '#050607', 2.4],
+    key: ['#f6f3ee', 3.7, [4.5, 7, 5]],
+    rim: ['#e8edf0', 3.2, [-4, 3.5, -4]],
+    fill: ['#b8bdc1', 1.15, [4, 1.5, -3]],
     exposure: 1.15
   },
   bright: {
-    hemisphere: ['#f4fbff', '#11151a', 4.2],
-    key: ['#ffffff', 6.4, [3.5, 7.5, 5.5]],
-    rim: ['#c7faff', 2.5, [-4, 4, -4]],
-    fill: ['#d8ceff', 2.8, [4, 2, -2]],
+    hemisphere: ['#eef1f2', '#0b0c0d', 4.2],
+    key: ['#fffdfa', 6.4, [3.5, 7.5, 5.5]],
+    rim: ['#edf0f2', 2.5, [-4, 4, -4]],
+    fill: ['#d7d9db', 2.8, [4, 2, -2]],
     exposure: 1.3
   },
-  side: {
-    hemisphere: ['#91a7b0', '#030405', 1.35],
-    key: ['#fff0dc', 6.2, [-5.5, 3.2, 1.5]],
-    rim: ['#65f3ff', 1.1, [4.5, 3, -4]],
-    fill: ['#8b78c7', 0.25, [4, 1, 2]],
+  softFront: {
+    hemisphere: ['#c5c9cb', '#040505', 1.6],
+    key: ['#f7f4ef', 2.7, [0, 4.8, 5.8]],
+    rim: ['#e0e4e6', 0.85, [-3, 3, -4]],
+    fill: ['#adb1b4', 0.55, [3, 2, -1]],
     exposure: 1.08
   },
+  side: {
+    hemisphere: ['#9ca2a5', '#030405', 1.35],
+    key: ['#f5f1eb', 6.2, [-5.5, 3.2, 1.5]],
+    rim: ['#dce1e3', 1.1, [4.5, 3, -4]],
+    fill: ['#92979a', 0.25, [4, 1, 2]],
+    exposure: 1.08
+  },
+  highSide: {
+    hemisphere: ['#858b8e', '#020303', 0.7],
+    key: ['#f5f2ec', 4.5, [-4.8, 6.8, 1.8]],
+    rim: ['#e1e5e7', 1.4, [3, 4, -4]],
+    fill: ['#969b9e', 0.22, [3, 1.5, 2]],
+    exposure: 1.02
+  },
+  cross: {
+    hemisphere: ['#91979a', '#020303', 0.85],
+    key: ['#f7f4ef', 3.6, [-4, 5, 3.5]],
+    rim: ['#e7eaec', 3, [4, 4, -3.5]],
+    fill: ['#9b9fa2', 0.25, [0, 2, 4]],
+    exposure: 1.05
+  },
+  lowKey: {
+    hemisphere: ['#777d80', '#010203', 0.52],
+    key: ['#e5e3df', 1.65, [-3.8, 5.5, 3]],
+    rim: ['#e2e6e8', 3.8, [4, 3.8, -4.5]],
+    fill: ['#858a8d', 0.16, [3, 1.5, -2]],
+    exposure: 0.98
+  },
+  top: {
+    hemisphere: ['#686d70', '#010203', 0.38],
+    key: ['#f4f3ef', 5.2, [0, 8, 0.5]],
+    rim: ['#e1e5e7', 1.8, [-3.5, 3.5, -4]],
+    fill: ['#7e8386', 0.12, [3, 1, 1]],
+    exposure: 1.02
+  },
   rim: {
-    hemisphere: ['#617078', '#020304', 0.72],
-    key: ['#d7e7eb', 0.65, [2, 6, 4]],
-    rim: ['#65f3ff', 7.4, [-3.5, 4.5, -5.5]],
-    fill: ['#ff6fae', 0.65, [4.5, 2, -3]],
+    hemisphere: ['#656b6e', '#020304', 0.72],
+    key: ['#deddda', 0.65, [2, 6, 4]],
+    rim: ['#eef1f2', 7.4, [-3.5, 4.5, -5.5]],
+    fill: ['#a7aaac', 0.65, [4.5, 2, -3]],
     exposure: 1.12
   },
+  softSilhouette: {
+    hemisphere: ['#484d50', '#000000', 0.38],
+    key: ['#a5a8aa', 0.32, [1.5, 5.5, 4]],
+    rim: ['#edf0f1', 7.8, [0, 4.2, -5.8]],
+    fill: ['#858a8d', 0.18, [4, 1.8, -3]],
+    exposure: 1.05
+  },
+  backlight: {
+    hemisphere: ['#3c4144', '#000000', 0.3],
+    key: ['#868b8e', 0.24, [-2, 5, 3.5]],
+    rim: ['#f0f2f3', 7.2, [0, 3.5, -5.5]],
+    fill: ['#797e81', 0.1, [3.5, 1.5, -2]],
+    exposure: 1
+  },
   silhouette: {
-    hemisphere: ['#22292d', '#000000', 0.2],
-    key: ['#42545b', 0.15, [0, 5, 5]],
-    rim: ['#b9fbff', 8.8, [0, 4, -6]],
+    hemisphere: ['#25292b', '#000000', 0.2],
+    key: ['#484d50', 0.15, [0, 5, 5]],
+    rim: ['#f2f3f4', 8.8, [0, 4, -6]],
     fill: ['#000000', 0, [4, 2, -3]],
     exposure: 0.92
   }
+};
+const LIGHTING_COLOR_PRESETS = {
+  neutral: null,
+  ivory: { light: '#f0e9dd', ground: '#090806' },
+  warm: { light: '#e8c6a7', ground: '#0d0805' },
+  amber: { light: '#d8bc88', ground: '#0c0904' },
+  cool: { light: '#b7c9d3', ground: '#05080a' },
+  mist: { light: '#bdd2d0', ground: '#040909' },
+  sage: { light: '#c4d0b9', ground: '#060904' },
+  blush: { light: '#d8bdc2', ground: '#0b0608' },
+  lavender: { light: '#c8c0d6', ground: '#070609' },
+  // Keep old shared URLs valid, but map their saturated names to restrained tints.
+  cyan: { light: '#bdd2d0', ground: '#040909' },
+  magenta: { light: '#c8c0d6', ground: '#070609' },
+  red: { light: '#d8bdc2', ground: '#0b0608' }
 };
 const AVATAR_POINT_BUDGET = EMBEDDED_VIEW ? 6000 : 22000;
 const EXPERIMENT_INFO = {
@@ -116,11 +201,11 @@ const EXPERIMENT_INFO = {
   },
   sync: {
     label: 'SYNCHRONOUS LIMBS',
-    description: 'BILATERAL + SAME-SIDE + CROSS-BODY LINKS MAP CORAL ASYNCHRONY TO CYAN SYNCHRONY'
+    description: 'UNIFIED RED BILATERAL + SAME-SIDE + CROSS-BODY LINKS REVEAL LIMB SYNCHRONY'
   },
   space: {
     label: 'EXTERNAL BODY SPACES',
-    description: 'FIVE WARPED 3D PANELS OCCUPY LEG–LEG, ARM–LEG + ARM–HEAD NEGATIVE SPACES'
+    description: 'A LIVE 3D POINT CLOUD FILLS THE OUTER BODY HULL WHILE EVERY BODY SURFACE CARVES OUT THE NEGATIVE SPACE'
   },
   relations: {
     label: 'SHIFTING RELATIONS',
@@ -128,7 +213,10 @@ const EXPERIMENT_INFO = {
   }
 };
 const EXPERIMENT_KEYS = Object.keys(EXPERIMENT_INFO);
-const AXIS_IDLE_COLOR = new THREE.Color(0xff304c);
+const EXPERIMENT_RED = new THREE.Color(0xfb5c50);
+const CURVE_LINE_RADIUS = 0.0072;
+const SYNC_LINE_WIDTH = 1.8;
+const AXIS_IDLE_COLOR = EXPERIMENT_RED.clone();
 const AXIS_CONTACT_COLOR = new THREE.Color(0xffffff);
 const AXIS_CONTACT_DISTANCE = 0.24;
 const AXIS_TOUCH_DISTANCE = 0.055;
@@ -142,13 +230,6 @@ const ENERGY_HEAT_LINKS = [
   ['leftLeg', 'leftFoot'],
   ['body', 'rightLeg'],
   ['rightLeg', 'rightFoot']
-];
-const SPACE_PANEL_DEFINITIONS = [
-  { id: 'betweenLegs', color: 0xff4938, depth: 0.09 },
-  { id: 'leftArmLeg', color: 0xff3528, depth: 0.078 },
-  { id: 'rightArmLeg', color: 0xff3528, depth: 0.078 },
-  { id: 'leftArmHead', color: 0xff5940, depth: 0.07 },
-  { id: 'rightArmHead', color: 0xff5940, depth: 0.07 }
 ];
 const AXES = [
   { key: 'x', label: 'X', color: '#65f3ff' },
@@ -263,6 +344,7 @@ const TRACK_DEFINITIONS = [
 const ui = {
   appShell: document.querySelector('.app-shell'),
   gridViewLink: document.querySelector('#grid-view-link'),
+  resetAll: document.querySelector('#reset-all'),
   hideControlButtons: document.querySelector('#hide-control-buttons'),
   hideAllUi: document.querySelector('#hide-all-ui'),
   select: document.querySelector('#dance-select'),
@@ -271,7 +353,6 @@ const ui = {
   loading: document.querySelector('#loading-state'),
   loadingLabel: document.querySelector('#loading-state p'),
   loadingProgress: document.querySelector('#loading-progress'),
-  frameReadout: document.querySelector('#frame-readout'),
   signalList: document.querySelector('#signal-list'),
   elbowAngle: document.querySelector('#elbow-angle'),
   kneeAngle: document.querySelector('#knee-angle'),
@@ -283,11 +364,13 @@ const ui = {
   resetButton: document.querySelector('#reset-button'),
   speedButtons: [...document.querySelectorAll('[data-speed]')],
   avatarStyleToggle: document.querySelector('#avatar-style-toggle'),
+  avatarStyleClose: document.querySelector('#avatar-style-close'),
   avatarStyleStatus: document.querySelector('#avatar-style-status'),
   avatarStylePanel: document.querySelector('#avatar-style-panel'),
   avatarColorButtons: [...document.querySelectorAll('[data-avatar-color]')],
   avatarSurfaceButtons: [...document.querySelectorAll('[data-avatar-surface]')],
   lightingPresetButtons: [...document.querySelectorAll('[data-lighting-preset]')],
+  lightingColorButtons: [...document.querySelectorAll('[data-lighting-color]')],
   cameraOrbitToggle: document.querySelector('#camera-orbit-toggle'),
   cameraOrbitStatus: document.querySelector('#camera-orbit-status'),
   cameraSpeedButtons: [...document.querySelectorAll('[data-camera-speed]')],
@@ -295,6 +378,7 @@ const ui = {
   avatarMoveButtons: [...document.querySelectorAll('[data-avatar-move]')],
   avatarPositionReadout: document.querySelector('#avatar-position-readout'),
   visualizationMenuToggle: document.querySelector('#visualization-menu-toggle'),
+  visualizationMenuClose: document.querySelector('#visualization-menu-close'),
   visualizationMenuStatus: document.querySelector('#visualization-menu-status'),
   visualizationMenuPanel: document.querySelector('#visualization-menu-panel'),
   experimentButtons: [...document.querySelectorAll('[data-experiment]')],
@@ -307,9 +391,11 @@ const ui = {
   graphModeButtons: [...document.querySelectorAll('[data-graph-mode]')],
   graphKeys: [...document.querySelectorAll('[data-graph-key]')],
   cameraControlsToggle: document.querySelector('#camera-controls-toggle'),
+  cameraControlsClose: document.querySelector('#camera-controls-close'),
   cameraControlsStatus: document.querySelector('#camera-controls-status'),
   cameraControlsPanel: document.querySelector('#camera-controls-panel'),
   lineControlsToggle: document.querySelector('#line-controls-toggle'),
+  lineControlsClose: document.querySelector('#line-controls-close'),
   lineControlsStatus: document.querySelector('#line-controls-status'),
   lineControlsPanel: document.querySelector('#line-controls-panel'),
   lineDisplayToggle: document.querySelector('#line-display-toggle'),
@@ -320,12 +406,13 @@ const ui = {
   traceSampleRateButtons: [...document.querySelectorAll('[data-trace-sample-rate]')],
   analysisPanel: document.querySelector('.analysis-panel'),
   analysisPanelToggle: document.querySelector('#analysis-panel-toggle'),
+  analysisPanelClose: document.querySelector('#analysis-panel-close'),
   analysisPanelStatus: document.querySelector('#analysis-panel-status'),
   analysisResizer: document.querySelector('#analysis-resizer')
 };
 
 const state = {
-  movementIndex: 0,
+  movementIndex: MODEL_COUNT - 1,
   loadToken: 0,
   root: null,
   modelContainer: null,
@@ -335,11 +422,12 @@ const state = {
   bones: new Map(),
   trackers: [],
   playing: true,
-  speed: 1,
+  speed: DEFAULT_SPEED,
   avatarStyleOpen: false,
-  avatarColor: 'pearl',
-  surfaceMode: 'smooth',
-  lightingPreset: 'studio',
+  avatarColor: DEFAULT_AVATAR_COLOR,
+  surfaceMode: DEFAULT_SURFACE_MODE,
+  lightingPreset: DEFAULT_LIGHTING_PRESET,
+  lightingColor: DEFAULT_LIGHTING_COLOR,
   skeletonGroup: null,
   skeletonBones: [],
   skeletonConnections: [],
@@ -365,7 +453,7 @@ const state = {
   bodyPointsVisible: false,
   traceDots: false,
   traceSmoothing: true,
-  traceSampleRate: 240,
+  traceSampleRate: 30,
   floorLight: 'off',
   graphMode: 'all',
   cameraControlsOpen: false,
@@ -376,15 +464,20 @@ const state = {
   panelResizeStartWidth: 390,
   panelResizing: false,
   embeddedTransportElapsed: 0,
+  embeddedEffectElapsed: 0,
   initialTransportPending: !EMBEDDED_VIEW && (REQUESTED_PROGRESS !== null || REQUESTED_PLAYING !== null),
-  initialViewStatePending: !EMBEDDED_VIEW && Boolean(REQUESTED_GRID_CELL_STATE?.view),
+  initialViewStatePending: !EMBEDDED_VIEW && Boolean(REQUESTED_URL_VIEW_STATE || REQUESTED_GRID_CELL_STATE?.view),
   duration: 0,
   clipStart: 0,
   lastClipTime: 0,
   sampleElapsed: 0,
   trailElapsed: 0,
-  ready: false
+  ready: false,
+  resetAllPending: false
 };
+
+let shareUrlElapsed = 0;
+let lastShareableUrl = '';
 
 const renderer = new THREE.WebGLRenderer({
   canvas: ui.threeCanvas,
@@ -394,7 +487,7 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'high-performance'
 });
 renderer.setClearColor(0x050607, 1);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, EMBEDDED_VIEW ? 1.5 : 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
@@ -423,7 +516,7 @@ scene.add(ambient);
 const keyLight = new THREE.DirectionalLight(0xfff5e8, 3.7);
 keyLight.position.set(4.5, 7, 5);
 keyLight.castShadow = true;
-keyLight.shadow.mapSize.set(1024, 1024);
+keyLight.shadow.mapSize.set(EMBEDDED_VIEW ? 512 : 1024, EMBEDDED_VIEW ? 512 : 1024);
 keyLight.shadow.camera.left = -4;
 keyLight.shadow.camera.right = 4;
 keyLight.shadow.camera.top = 5;
@@ -446,31 +539,6 @@ ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.012;
 ground.receiveShadow = false;
 scene.add(ground);
-
-const grid = new THREE.GridHelper(12, 24, 0x25383c, 0x13191c);
-grid.material.transparent = true;
-grid.material.opacity = FLOOR_LIGHT_LEVELS.off.gridOpacity;
-grid.visible = !EMBEDDED_VIEW;
-grid.position.y = 0;
-scene.add(grid);
-
-const floorRings = [];
-for (const radius of [1.2, 2.2, 3.2]) {
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(radius - 0.006, radius + 0.006, 128),
-    new THREE.MeshBasicMaterial({
-      color: 0x65f3ff,
-      transparent: true,
-      opacity: FLOOR_LIGHT_LEVELS.off.ringOpacity,
-      side: THREE.DoubleSide
-    })
-  );
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.003;
-  ring.visible = !EMBEDDED_VIEW;
-  scene.add(ring);
-  floorRings.push(ring);
-}
 
 const analysisObjects = new THREE.Group();
 scene.add(analysisObjects);
@@ -609,6 +677,7 @@ function clearCurrentModel() {
   state.experimentVisuals = null;
   state.experimentFocusId = null;
   state.experimentFocusElapsed = 0;
+  state.embeddedEffectElapsed = 0;
   state.duration = 0;
   state.clipStart = 0;
   resetMetricReadouts();
@@ -961,10 +1030,18 @@ function applyAvatarAppearance() {
   if (state.surfaceMode === 'skeleton') updateAvatarSkeleton();
 }
 
+function closePeerControlMenus(except) {
+  if (except !== 'avatar' && state.avatarStyleOpen) setAvatarStyleOpen(false);
+  if (except !== 'camera' && state.cameraControlsOpen) setCameraControlsOpen(false);
+  if (except !== 'line' && state.lineControlsOpen) setLineControlsOpen(false);
+  if (except !== 'visualization' && state.visualizationMenuOpen) setVisualizationMenu(false);
+}
+
 function setAvatarStyleOpen(open) {
+  if (open) closePeerControlMenus('avatar');
   state.avatarStyleOpen = open;
   ui.avatarStyleToggle.setAttribute('aria-expanded', String(open));
-  ui.avatarStyleStatus.textContent = open ? 'HIDE' : 'SHOW';
+  ui.avatarStyleStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.avatarStylePanel.hidden = !open;
 }
 
@@ -982,24 +1059,38 @@ function setAvatarSurface(surface, activeButton) {
   applyAvatarAppearance();
 }
 
-function setLightingPreset(name, activeButton) {
-  const preset = LIGHTING_PRESETS[name];
+function applyLightingSetup() {
+  const preset = LIGHTING_PRESETS[state.lightingPreset];
   if (!preset) return;
-  state.lightingPreset = name;
-  ambient.color.set(preset.hemisphere[0]);
-  ambient.groundColor.set(preset.hemisphere[1]);
+  const color = LIGHTING_COLOR_PRESETS[state.lightingColor];
+  const lightColor = color?.light;
+  ambient.color.set(lightColor ?? preset.hemisphere[0]);
+  ambient.groundColor.set(color?.ground ?? preset.hemisphere[1]);
   ambient.intensity = preset.hemisphere[2];
-  keyLight.color.set(preset.key[0]);
+  keyLight.color.set(lightColor ?? preset.key[0]);
   keyLight.intensity = preset.key[1];
   keyLight.position.fromArray(preset.key[2]);
-  rimLight.color.set(preset.rim[0]);
+  rimLight.color.set(lightColor ?? preset.rim[0]);
   rimLight.intensity = preset.rim[1];
   rimLight.position.fromArray(preset.rim[2]);
-  fillLight.color.set(preset.fill[0]);
+  fillLight.color.set(lightColor ?? preset.fill[0]);
   fillLight.intensity = preset.fill[1];
   fillLight.position.fromArray(preset.fill[2]);
   renderer.toneMappingExposure = preset.exposure;
+}
+
+function setLightingPreset(name, activeButton) {
+  if (!(name in LIGHTING_PRESETS)) return;
+  state.lightingPreset = name;
+  applyLightingSetup();
   ui.lightingPresetButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
+}
+
+function setLightingColor(name, activeButton) {
+  if (!(name in LIGHTING_COLOR_PRESETS)) return;
+  state.lightingColor = name;
+  applyLightingSetup();
+  ui.lightingColorButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
 }
 
 function normalizeModel(root) {
@@ -1193,6 +1284,64 @@ function getGridEffectValue(experiments) {
   return 'custom';
 }
 
+function getCurrentViewState(
+  experiments = EXPERIMENT_KEYS.filter((key) => state.activeExperiments.has(key))
+) {
+  return {
+    experiments: [...experiments],
+    avatarColor: state.avatarColor,
+    surfaceMode: state.surfaceMode,
+    lightingPreset: state.lightingPreset,
+    lightingColor: state.lightingColor,
+    traceVisible: state.traceVisible,
+    bodyPointsVisible: state.bodyPointsVisible,
+    traceMode: state.traceMode,
+    traceWidth: state.traceWidth,
+    traceDots: state.traceDots,
+    traceSmoothing: state.traceSmoothing,
+    traceSampleRate: state.traceSampleRate,
+    floorLight: state.floorLight,
+    avatarOffsetX: state.avatarOffsetX,
+    avatarOffsetY: state.avatarOffsetY,
+    cameraOrbit: state.cameraOrbit,
+    cameraOrbitSpeed: state.cameraOrbitSpeed,
+    cameraOrbitDirection: state.cameraOrbitDirection,
+    cameraPosition: camera.position.toArray(),
+    cameraTarget: controls.target.toArray(),
+    analysisVisible: state.analysisVisible,
+    analysisWidth: state.analysisWidth,
+    graphMode: state.graphMode,
+    avatarStyleOpen: state.avatarStyleOpen,
+    cameraControlsOpen: state.cameraControlsOpen,
+    lineControlsOpen: state.lineControlsOpen,
+    visualizationMenuOpen: state.visualizationMenuOpen,
+    controlsHidden: document.body.classList.contains('controls-hidden'),
+    interfaceHidden: document.body.classList.contains('interface-hidden')
+  };
+}
+
+function syncShareableUrl() {
+  if (EMBEDDED_VIEW || !state.ready) return;
+  const url = new URL(window.location.href);
+  const experiments = EXPERIMENT_KEYS.filter((key) => state.activeExperiments.has(key));
+  const currentTime = Math.max(0, (state.action?.time ?? state.clipStart) - state.clipStart);
+  const duration = Math.max(0, state.duration - state.clipStart);
+  const progress = duration ? THREE.MathUtils.clamp(currentTime / duration, 0, 1) : 0;
+  const movement = MOVEMENTS[state.movementIndex];
+
+  if (movement) url.searchParams.set('movement', movement.id);
+  url.searchParams.set('effect', getGridEffectValue(experiments));
+  url.searchParams.set('speed', String(state.speed));
+  url.searchParams.set('progress', String(Number(progress.toFixed(6))));
+  url.searchParams.set('playing', String(state.playing));
+  writeViewStateToParams(url.searchParams, getCurrentViewState(experiments));
+
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  if (nextUrl === lastShareableUrl) return;
+  lastShareableUrl = nextUrl;
+  window.history.replaceState({}, '', nextUrl);
+}
+
 function applyViewState(view) {
   if (!view || typeof view !== 'object') return;
   if (Array.isArray(view.experiments)) setExperimentModes(view.experiments);
@@ -1204,6 +1353,9 @@ function applyViewState(view) {
   }
   if (view.lightingPreset) {
     setLightingPreset(view.lightingPreset, ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === view.lightingPreset));
+  }
+  if (view.lightingColor) {
+    setLightingColor(view.lightingColor, ui.lightingColorButtons.find((button) => button.dataset.lightingColor === view.lightingColor));
   }
   if (typeof view.traceVisible === 'boolean') setTraceVisibility(view.traceVisible);
   if (typeof view.bodyPointsVisible === 'boolean') setBodyPointsVisibility(view.bodyPointsVisible);
@@ -1235,16 +1387,38 @@ function applyViewState(view) {
     setCameraOrbitDirection(direction, ui.cameraDirectionButtons.find((button) => Number(button.dataset.cameraDirection) === direction));
   }
   if (typeof view.cameraOrbit === 'boolean') setCameraOrbit(view.cameraOrbit);
-  if (Array.isArray(view.cameraPosition) && view.cameraPosition.length === 3) camera.position.fromArray(view.cameraPosition);
-  if (Array.isArray(view.cameraTarget) && view.cameraTarget.length === 3) controls.target.fromArray(view.cameraTarget);
+  const hasSavedCamera = Array.isArray(view.cameraPosition)
+    && view.cameraPosition.length === 3
+    && Array.isArray(view.cameraTarget)
+    && view.cameraTarget.length === 3;
+  if (hasSavedCamera && EMBEDDED_VIEW) {
+    const savedPosition = new THREE.Vector3().fromArray(view.cameraPosition);
+    const savedTarget = new THREE.Vector3().fromArray(view.cameraTarget);
+    const savedDirection = savedPosition.sub(savedTarget);
+    if (savedDirection.lengthSq() < 0.000001) savedDirection.copy(EMBEDDED_CAMERA_OFFSET);
+    savedDirection.normalize();
+    const centerY = getEmbeddedAvatarCenterY();
+    controls.target.set(state.avatarOffsetX, centerY, 0);
+    camera.position.copy(controls.target).addScaledVector(savedDirection, EMBEDDED_CAMERA_DISTANCE);
+  } else if (hasSavedCamera) {
+    camera.position.fromArray(view.cameraPosition);
+    controls.target.fromArray(view.cameraTarget);
+  }
   controls.update();
+  applyAvatarScreenOffset();
   if (typeof view.analysisVisible === 'boolean') setAnalysisVisibility(view.analysisVisible);
   if (Number.isFinite(Number(view.analysisWidth))) setAnalysisWidth(Number(view.analysisWidth));
   if (view.graphMode) setGraphMode(view.graphMode, ui.graphModeButtons.find((button) => button.dataset.graphMode === view.graphMode));
+  if (typeof view.avatarStyleOpen === 'boolean') setAvatarStyleOpen(view.avatarStyleOpen);
+  if (typeof view.cameraControlsOpen === 'boolean') setCameraControlsOpen(view.cameraControlsOpen);
+  if (typeof view.lineControlsOpen === 'boolean') setLineControlsOpen(view.lineControlsOpen);
+  if (typeof view.visualizationMenuOpen === 'boolean') setVisualizationMenu(view.visualizationMenuOpen);
+  if (typeof view.controlsHidden === 'boolean') setControlButtonsHidden(view.controlsHidden);
+  if (typeof view.interfaceHidden === 'boolean') setInterfaceHidden(view.interfaceHidden);
 }
 
 function persistFocusedGridState() {
-  if (!RETURN_TO_GRID) return;
+  if (!RETURN_TO_GRID || state.resetAllPending) return;
   try {
     const storedGridState = JSON.parse(window.sessionStorage.getItem(GRID_STATE_KEY));
     const focusedIndex = Number(storedGridState?.focusedIndex);
@@ -1258,30 +1432,7 @@ function persistFocusedGridState() {
       movement: MOVEMENTS[state.movementIndex]?.id ?? storedGridState.cells[focusedIndex].movement,
       effect: getGridEffectValue(experiments),
       effects: experiments,
-      view: {
-        experiments,
-        avatarColor: state.avatarColor,
-        surfaceMode: state.surfaceMode,
-        lightingPreset: state.lightingPreset,
-        traceVisible: state.traceVisible,
-        bodyPointsVisible: state.bodyPointsVisible,
-        traceMode: state.traceMode,
-        traceWidth: state.traceWidth,
-        traceDots: state.traceDots,
-        traceSmoothing: state.traceSmoothing,
-        traceSampleRate: state.traceSampleRate,
-        floorLight: state.floorLight,
-        avatarOffsetX: state.avatarOffsetX,
-        avatarOffsetY: state.avatarOffsetY,
-        cameraOrbit: state.cameraOrbit,
-        cameraOrbitSpeed: state.cameraOrbitSpeed,
-        cameraOrbitDirection: state.cameraOrbitDirection,
-        cameraPosition: camera.position.toArray(),
-        cameraTarget: controls.target.toArray(),
-        analysisVisible: state.analysisVisible,
-        analysisWidth: state.analysisWidth,
-        graphMode: state.graphMode
-      }
+      view: getCurrentViewState(experiments)
     };
     storedGridState.transport = {
       playing: state.playing,
@@ -1292,6 +1443,16 @@ function persistFocusedGridState() {
   } catch {
     // Returning still works if temporary browser storage is unavailable.
   }
+}
+
+function resetAllSingleView() {
+  state.resetAllPending = true;
+  try {
+    window.sessionStorage.removeItem(GRID_STATE_KEY);
+  } catch {
+    // Reloading the clean route still resets this view if temporary storage is unavailable.
+  }
+  window.location.assign(`/?movement=${DEFAULT_MOVEMENT_ID}`);
 }
 
 function createExperimentalVisuals() {
@@ -1306,15 +1467,16 @@ function createExperimentalVisuals() {
       new THREE.Vector3(0, 0.001, 0)
     );
     const line = new THREE.Mesh(
-      new THREE.TubeGeometry(placeholderCurve, 2, 0.006, 6, false),
+      new THREE.TubeGeometry(placeholderCurve, 2, CURVE_LINE_RADIUS, 6, false),
       new THREE.MeshBasicMaterial({
-        color: tracker.color.clone().lerp(new THREE.Color(0xd9ffff), 0.28),
+        color: EXPERIMENT_RED,
         transparent: true,
-        opacity: 0.82,
+        opacity: 0.92,
         depthTest: true,
         depthWrite: false,
         side: THREE.DoubleSide,
-        blending: THREE.NormalBlending
+        blending: THREE.NormalBlending,
+        toneMapped: false
       })
     );
     const startCap = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), line.material);
@@ -1350,7 +1512,8 @@ function createExperimentalVisuals() {
         transparent: true,
         opacity: 1,
         depthTest: false,
-        depthWrite: false
+        depthWrite: false,
+        toneMapped: false
       })
     );
     marker.renderOrder = 19;
@@ -1394,13 +1557,14 @@ function createExperimentalVisuals() {
   const syncLines = new LineSegments2(
     syncGeometry,
     new LineMaterial({
-      color: 0xffffff,
-      linewidth: 1.8,
+      color: EXPERIMENT_RED,
+      linewidth: SYNC_LINE_WIDTH,
       vertexColors: true,
       transparent: true,
       opacity: 0.82,
       depthTest: false,
-      alphaToCoverage: true
+      alphaToCoverage: true,
+      toneMapped: false
     })
   );
   syncLines.renderOrder = 15;
@@ -1413,11 +1577,12 @@ function createExperimentalVisuals() {
     const marker = new THREE.Mesh(
       new THREE.SphereGeometry(0.03, 16, 14),
       new THREE.MeshBasicMaterial({
-        color: 0x65f3ff,
+        color: EXPERIMENT_RED,
         transparent: true,
         opacity: 0.94,
         depthTest: false,
-        blending: THREE.NormalBlending
+        blending: THREE.NormalBlending,
+        toneMapped: false
       })
     );
     marker.renderOrder = 16;
@@ -1425,40 +1590,8 @@ function createExperimentalVisuals() {
     syncNodes.set(trackerId, { tracker, marker, synchronyTotal: 0, relationshipCount: 0 });
   }
 
-  const spaceGroup = new THREE.Group();
-  const spaceBox = new THREE.Box3(new THREE.Vector3(-0.5, 0, -0.5), new THREE.Vector3(0.5, 2, 0.5));
-  const spacePanels = SPACE_PANEL_DEFINITIONS.map((definition, index) => {
-    const baseColor = new THREE.Color(definition.color);
-    const material = new THREE.MeshPhysicalMaterial({
-      color: baseColor,
-      emissive: baseColor.clone().multiplyScalar(0.12),
-      emissiveIntensity: 0.32,
-      roughness: 0.56,
-      metalness: 0,
-      clearcoat: 0.35,
-      clearcoatRoughness: 0.5,
-      transmission: 0.03,
-      ior: 1.18,
-      thickness: 0.08,
-      transparent: true,
-      opacity: 0.78,
-      depthTest: true,
-      depthWrite: false,
-      stencilWrite: true,
-      stencilRef: 1,
-      stencilFunc: THREE.NotEqualStencilFunc,
-      stencilFail: THREE.KeepStencilOp,
-      stencilZFail: THREE.KeepStencilOp,
-      stencilZPass: THREE.KeepStencilOp,
-      side: THREE.DoubleSide
-    });
-    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
-    mesh.frustumCulled = false;
-    mesh.renderOrder = 7 + (index % 2);
-    mesh.visible = false;
-    spaceGroup.add(mesh);
-    return { definition, mesh, phase: index * 0.83 };
-  });
+  const spaceVisuals = createExternalSpacePointCloud({ embedded: EMBEDDED_VIEW });
+  const spaceGroup = spaceVisuals.group;
 
   const relationsGroup = new THREE.Group();
   const relationPositions = new Float32Array(6);
@@ -1470,30 +1603,38 @@ function createExperimentalVisuals() {
   const relationBeam = new LineSegments2(
     relationGeometry,
     new LineMaterial({
-      color: 0xffffff,
+      color: EXPERIMENT_RED,
       linewidth: 3.6,
       vertexColors: true,
       transparent: true,
       opacity: 1,
       depthTest: false,
-      alphaToCoverage: true
+      alphaToCoverage: true,
+      toneMapped: false
     })
   );
   relationBeam.renderOrder = 18;
   const relationHalo = new THREE.Mesh(
     new THREE.RingGeometry(0.085, 0.14, 48),
     new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+      color: EXPERIMENT_RED,
       transparent: true,
       opacity: 0.96,
       side: THREE.DoubleSide,
       depthTest: false,
-      blending: THREE.AdditiveBlending
+      blending: THREE.NormalBlending,
+      toneMapped: false
     })
   );
   const relationCore = new THREE.Mesh(
     new THREE.SphereGeometry(0.05, 14, 14),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false })
+    new THREE.MeshBasicMaterial({
+      color: EXPERIMENT_RED,
+      transparent: true,
+      opacity: 1,
+      depthTest: false,
+      toneMapped: false
+    })
   );
   relationHalo.renderOrder = 20;
   relationCore.renderOrder = 20;
@@ -1521,13 +1662,7 @@ function createExperimentalVisuals() {
       positions: syncPositions,
       colors: syncColors
     },
-    space: {
-      group: spaceGroup,
-      box: spaceBox,
-      panels: spacePanels,
-      bodyHeight: DISPLAY_HEIGHT,
-      lastUpdate: -Infinity
-    },
+    space: spaceVisuals,
     relations: { group: relationsGroup, beam: relationBeam, positions: relationPositions, colors: relationColors, halo: relationHalo, core: relationCore }
   };
   updateExperimentVisibility();
@@ -1761,7 +1896,7 @@ function updateCurveVisuals() {
       const curve = new THREE.CatmullRomCurve3(strokePoints, false, 'centripetal', 0.5);
       const tubularSegments = Math.max(12, Math.min(180, (strokePoints.length - 1) * 3));
       line.geometry.dispose();
-      const lineRadius = 0.0052;
+      const lineRadius = CURVE_LINE_RADIUS;
       line.geometry = new THREE.TubeGeometry(
         curve,
         tubularSegments,
@@ -1776,10 +1911,10 @@ function updateCurveVisuals() {
     }
 
     line.visible = item.strokeVisible;
-    line.material.opacity = 0.72;
+    line.material.opacity = 0.92;
     caps.forEach((cap) => {
       cap.visible = item.strokeVisible;
-      cap.material.opacity = 0.72;
+      cap.material.opacity = 0.92;
     });
   }
 }
@@ -1865,8 +2000,6 @@ function updateAxisVisuals() {
 
 function updateSyncVisuals() {
   const visuals = state.experimentVisuals.sync;
-  const asynchronousColor = new THREE.Color(0xff6f91);
-  const synchronousColor = new THREE.Color(0x65f3ff);
   visuals.nodes.forEach((node) => {
     node.synchronyTotal = 0;
     node.relationshipCount = 0;
@@ -1903,12 +2036,11 @@ function updateSyncVisuals() {
       0,
       1
     );
-    tempColor.lerpColors(asynchronousColor, synchronousColor, synchrony);
     for (let vertex = 0; vertex < 2; vertex += 1) {
       const colorOffset = offset + vertex * 3;
-      visuals.colors[colorOffset] = tempColor.r;
-      visuals.colors[colorOffset + 1] = tempColor.g;
-      visuals.colors[colorOffset + 2] = tempColor.b;
+      visuals.colors[colorOffset] = EXPERIMENT_RED.r;
+      visuals.colors[colorOffset + 1] = EXPERIMENT_RED.g;
+      visuals.colors[colorOffset + 2] = EXPERIMENT_RED.b;
     }
     const startNode = visuals.nodes.get(pair.start.definition.id);
     const endNode = visuals.nodes.get(pair.end.definition.id);
@@ -1926,452 +2058,11 @@ function updateSyncVisuals() {
       ? node.synchronyTotal / node.relationshipCount
       : 0;
     node.marker.position.copy(node.tracker.anchorPosition);
-    node.marker.material.color.lerpColors(asynchronousColor, synchronousColor, synchrony);
+    node.marker.material.color.copy(EXPERIMENT_RED);
     node.marker.scale.setScalar(0.9 + synchrony * 0.42);
   });
   visuals.lines.geometry.attributes.instanceStart.data.needsUpdate = true;
   visuals.lines.geometry.attributes.instanceColorStart.data.needsUpdate = true;
-}
-
-function measurePointToSegment(px, py, pz, ax, ay, az, bx, by, bz, output) {
-  const abx = bx - ax;
-  const aby = by - ay;
-  const abz = bz - az;
-  const apx = px - ax;
-  const apy = py - ay;
-  const apz = pz - az;
-  const denominator = abx * abx + aby * aby + abz * abz;
-  const t = denominator > 0.0000001
-    ? THREE.MathUtils.clamp((apx * abx + apy * aby + apz * abz) / denominator, 0, 1)
-    : 0;
-  const dx = px - (ax + abx * t);
-  const dy = py - (ay + aby * t);
-  const dz = pz - (az + abz * t);
-  output[0] = dx * dx + dy * dy + dz * dz;
-  output[1] = t;
-}
-
-function getSpaceBoneRadius(name, bodyHeight) {
-  if (/Head/i.test(name)) return bodyHeight * 0.105;
-  if (/Neck/i.test(name)) return bodyHeight * 0.058;
-  if (/Spine2/i.test(name)) return bodyHeight * 0.12;
-  if (/Hips|Spine/i.test(name)) return bodyHeight * 0.11;
-  if (/UpLeg/i.test(name)) return bodyHeight * 0.068;
-  if (/Leg/i.test(name)) return bodyHeight * 0.052;
-  if (/Foot|Toe/i.test(name)) return bodyHeight * 0.054;
-  if (/Shoulder/i.test(name)) return bodyHeight * 0.05;
-  if (/Arm/i.test(name)) return bodyHeight * 0.046;
-  if (/Hand/i.test(name)) return bodyHeight * 0.041;
-  return bodyHeight * 0.05;
-}
-
-function updateSpaceJellies(visuals, boxSize) {
-  const bodyHeight = Math.max(0.6, visuals.bodyHeight);
-  const min = visuals.box.min;
-  const sizeX = Math.max(0.2, boxSize.x);
-  const sizeY = Math.max(0.2, boxSize.y);
-  const sizeZ = Math.max(0.2, boxSize.z);
-  const time = state.experimentTime;
-  const segmentMeasurement = new Float64Array(2);
-  const trackers = Object.fromEntries(
-    state.trackers.map((tracker) => [tracker.definition.id, tracker])
-  );
-  const normalizePosition = (position) => [
-    THREE.MathUtils.clamp((position.x - min.x) / sizeX, 0.055, 0.945),
-    THREE.MathUtils.clamp((position.y - min.y) / sizeY, 0.055, 0.945),
-    THREE.MathUtils.clamp((position.z - min.z) / sizeZ, 0.055, 0.945)
-  ];
-
-  const boneNodes = new Map();
-  SPACE_BONE_CHAINS.flat().forEach((name) => {
-    const bone = state.bones.get(name);
-    if (!bone || boneNodes.has(name)) return;
-    boneNodes.set(name, {
-      position: bone.getWorldPosition(new THREE.Vector3()),
-      radius: getSpaceBoneRadius(name, bodyHeight)
-    });
-  });
-  const clearanceSpheres = boneNodes.size
-    ? [...boneNodes.values()]
-    : state.trackers.map((tracker) => ({
-        position: tracker.anchorPosition,
-        radius: (SPACE_CLEARANCE_RADII[tracker.definition.id] ?? 0.06) * bodyHeight
-      }));
-  const clearanceCapsules = [];
-  SPACE_BONE_CHAINS.forEach((chain) => {
-    for (let index = 0; index < chain.length - 1; index += 1) {
-      const start = boneNodes.get(chain[index]);
-      const end = boneNodes.get(chain[index + 1]);
-      if (start && end) clearanceCapsules.push({ start, end });
-    }
-  });
-
-  const resolution = visuals.jellies[0]?.jelly.size ?? 22;
-  const fieldSize = resolution * resolution * resolution;
-  if (visuals.clearanceField.length !== fieldSize) {
-    visuals.clearanceField = new Float32Array(fieldSize);
-  }
-  const clearanceStart = bodyHeight * 0.006;
-  const clearanceEnd = bodyHeight * 0.03;
-  for (let z = 0; z < resolution; z += 1) {
-    const nz = z / (resolution - 1);
-    const wz = min.z + nz * sizeZ;
-    for (let y = 0; y < resolution; y += 1) {
-      const ny = y / (resolution - 1);
-      const wy = min.y + ny * sizeY;
-      const rowOffset = z * resolution * resolution + y * resolution;
-      for (let x = 0; x < resolution; x += 1) {
-        const nx = x / (resolution - 1);
-        const wx = min.x + nx * sizeX;
-        let minimumClearance = Infinity;
-        for (const sphere of clearanceSpheres) {
-          const dx = wx - sphere.position.x;
-          const dy = wy - sphere.position.y;
-          const dz = wz - sphere.position.z;
-          minimumClearance = Math.min(
-            minimumClearance,
-            Math.sqrt(dx * dx + dy * dy + dz * dz) - sphere.radius
-          );
-        }
-        for (const capsule of clearanceCapsules) {
-          measurePointToSegment(
-            wx,
-            wy,
-            wz,
-            capsule.start.position.x,
-            capsule.start.position.y,
-            capsule.start.position.z,
-            capsule.end.position.x,
-            capsule.end.position.y,
-            capsule.end.position.z,
-            segmentMeasurement
-          );
-          const radius = THREE.MathUtils.lerp(
-            capsule.start.radius,
-            capsule.end.radius,
-            segmentMeasurement[1]
-          );
-          minimumClearance = Math.min(minimumClearance, Math.sqrt(segmentMeasurement[0]) - radius);
-        }
-        const clearanceT = THREE.MathUtils.clamp(
-          (minimumClearance - clearanceStart) / (clearanceEnd - clearanceStart),
-          0,
-          1
-        );
-        visuals.clearanceField[rowOffset + x] = clearanceT * clearanceT * (3 - 2 * clearanceT);
-      }
-    }
-  }
-
-  visuals.jellies.forEach(({ jelly }) => {
-    jelly.visible = false;
-  });
-  const sources = visuals.jellies.map(({ definition, jelly, phase }) => {
-    const startTracker = trackers[definition.start];
-    const endTracker = definition.end ? trackers[definition.end] : null;
-    if (!startTracker || (definition.end && !endTracker)) {
-      return null;
-    }
-    const rawStart = normalizePosition(startTracker.anchorPosition);
-    const rawEnd = endTracker ? normalizePosition(endTracker.anchorPosition) : [...rawStart];
-    const end = [...rawEnd];
-    if (definition.face === 'left') end[0] = 0.06;
-    if (definition.face === 'right') end[0] = 0.94;
-    if (definition.face === 'top') end[1] = 0.94;
-    if (definition.face === 'bottom') end[1] = 0.06;
-    if (definition.face === 'front') end[2] = 0.06;
-    if (definition.face === 'back') end[2] = 0.94;
-    // Sources deliberately begin inside their bounding body parts and finish at
-    // the opposing body/box boundary. The clearance mask carves the body back
-    // out, leaving a cast of the void that remains attached to its boundaries.
-    const startInset = 0;
-    const endInset = 0;
-    const start = rawStart.map((value, axis) => THREE.MathUtils.lerp(value, end[axis], startInset));
-    const insetEnd = end.map((value, axis) => THREE.MathUtils.lerp(value, rawStart[axis], endInset));
-    const sourceLength = Math.hypot(
-      insetEnd[0] - start[0],
-      insetEnd[1] - start[1],
-      insetEnd[2] - start[2]
-    );
-    const adaptiveRadius = THREE.MathUtils.clamp(
-      definition.radius + sourceLength * definition.inflate,
-      definition.radius,
-      0.205
-    );
-    return { definition, jelly, phase, start, end: insetEnd, radius: adaptiveRadius };
-  }).filter(Boolean);
-
-  sources.forEach((source) => {
-    const { definition, jelly, phase, start, end, radius } = source;
-    jelly.visible = true;
-    jelly.reset();
-    for (let z = 0; z < resolution; z += 1) {
-      const nz = z / (resolution - 1);
-      const wz = min.z + nz * sizeZ;
-      for (let y = 0; y < resolution; y += 1) {
-        const ny = y / (resolution - 1);
-        const wy = min.y + ny * sizeY;
-        const rowOffset = z * jelly.size2 + y * resolution;
-        for (let x = 0; x < resolution; x += 1) {
-          const nx = x / (resolution - 1);
-          measurePointToSegment(nx, ny, nz, ...start, ...end, segmentMeasurement);
-          const sourceProgress = segmentMeasurement[1];
-          const sourceDepth = THREE.MathUtils.lerp(start[2], end[2], sourceProgress);
-          const depthDelta = nz - sourceDepth;
-          const breathingRadius = radius * (
-            1 + Math.sin(time * 1.72 + phase + sourceProgress * 5.1) * 0.12
-          );
-          const sourceDistance = segmentMeasurement[0] + depthDelta * depthDelta * 1.45;
-          const sourceScore = sourceDistance / (breathingRadius * breathingRadius);
-          let nearestOtherScore = Infinity;
-          for (const other of sources) {
-            if (other === source) continue;
-            measurePointToSegment(nx, ny, nz, ...other.start, ...other.end, segmentMeasurement);
-            const otherDepth = THREE.MathUtils.lerp(other.start[2], other.end[2], segmentMeasurement[1]);
-            const otherDepthDelta = nz - otherDepth;
-            const otherDistance = segmentMeasurement[0] + otherDepthDelta * otherDepthDelta * 1.45;
-            nearestOtherScore = Math.min(
-              nearestOtherScore,
-              otherDistance / (other.radius * other.radius)
-            );
-          }
-          const ownership = Number.isFinite(nearestOtherScore)
-            ? THREE.MathUtils.clamp((nearestOtherScore - sourceScore + 0.22) / 0.44, 0, 1)
-            : 1;
-          let jellyField = Math.exp(-sourceScore / 1.05) * definition.strength;
-          const organicPulse = 1 + (
-            Math.sin(nx * 12.7 + time * 1.18 + phase)
-            * Math.sin(ny * 10.9 - time * 0.82)
-            * Math.cos(nz * 11.8 + time * 0.97)
-          ) * 0.18;
-          jellyField *= organicPulse;
-          jelly.field[rowOffset + x] = Math.max(0, jellyField)
-            * ownership
-            * visuals.clearanceField[rowOffset + x];
-        }
-      }
-    }
-    jelly.update();
-    const baseOpacity = definition.face ? 0.18 : 0.31;
-    jelly.material.opacity = baseOpacity + (Math.sin(time * 1.42 + phase) + 1) * 0.035;
-    jelly.material.emissiveIntensity = (definition.face ? 0.38 : 0.5)
-      + (Math.sin(time * 1.76 + phase) + 1) * 0.11;
-  });
-}
-
-function insetSpacePair(firstPoint, secondPoint, horizontalAxis, bodyHeight) {
-  let left = firstPoint;
-  let right = secondPoint;
-  if (left.dot(horizontalAxis) > right.dot(horizontalAxis)) {
-    [left, right] = [right, left];
-  }
-  const distance = left.distanceTo(right);
-  if (distance < 0.0001) return [left.clone(), right.clone()];
-  const inset = Math.min(distance * 0.28, bodyHeight * 0.022);
-  const amount = inset / distance;
-  return [
-    left.clone().lerp(right, amount),
-    right.clone().lerp(left, amount)
-  ];
-}
-
-function updateFlatSpacePanel(
-  panel,
-  boundaryPoints,
-  horizontalAxis,
-  verticalAxis,
-  depthAxis,
-  bodyHeight
-) {
-  if (boundaryPoints.length < 3 || boundaryPoints.some((point) => !point)) {
-    panel.mesh.visible = false;
-    return;
-  }
-
-  const boundaryCenter = boundaryPoints.reduce(
-    (sum, point) => sum.add(point),
-    new THREE.Vector3()
-  ).multiplyScalar(1 / boundaryPoints.length);
-  const projected = boundaryPoints.map((point) => {
-    const relative = point.clone().sub(boundaryCenter);
-    return new THREE.Vector2(relative.dot(horizontalAxis), relative.dot(verticalAxis));
-  });
-  const signedArea = projected.reduce((area, point, index) => {
-    const next = projected[(index + 1) % projected.length];
-    return area + point.x * next.y - next.x * point.y;
-  }, 0) * 0.5;
-  if (Math.abs(signedArea) < bodyHeight * bodyHeight * 0.0028) {
-    panel.mesh.visible = false;
-    return;
-  }
-  const orientedBoundary = boundaryPoints.map((point) => point.clone());
-  if (signedArea < 0) orientedBoundary.reverse();
-  const contourCurve = new THREE.CatmullRomCurve3(
-    orientedBoundary,
-    true,
-    'centripetal',
-    0.42
-  );
-  const contour = contourCurve.getSpacedPoints(48);
-  if (
-    contour.length > 3
-    && contour[0].distanceToSquared(contour[contour.length - 1]) < 0.0000001
-  ) {
-    contour.pop();
-  }
-  if (contour.length < 3) {
-    panel.mesh.visible = false;
-    return;
-  }
-
-  const center = contour.reduce(
-    (sum, point) => sum.add(point),
-    new THREE.Vector3()
-  ).multiplyScalar(1 / contour.length);
-  const panelNormal = new THREE.Vector3();
-  contour.forEach((point, index) => {
-    const current = point.clone().sub(center);
-    const next = contour[(index + 1) % contour.length].clone().sub(center);
-    panelNormal.add(current.cross(next));
-  });
-  if (panelNormal.lengthSq() < 0.000001) panelNormal.copy(depthAxis);
-  panelNormal.normalize();
-  if (panelNormal.dot(depthAxis) < 0) panelNormal.multiplyScalar(-1);
-
-  const depth = Math.max(0.08, bodyHeight * (panel.definition.depth ?? 0.078));
-  const bevelDepth = Math.min(depth * 0.24, bodyHeight * 0.016);
-  const layers = [
-    { offset: -depth * 0.5, scale: 0.955 },
-    { offset: -depth * 0.5 + bevelDepth, scale: 1 },
-    { offset: depth * 0.5 - bevelDepth, scale: 1 },
-    { offset: depth * 0.5, scale: 0.955 }
-  ];
-  const hullPoints = [];
-  layers.forEach((layer) => {
-    contour.forEach((point) => {
-      const relative = point.clone().sub(center);
-      const warpedDepth = relative.dot(panelNormal);
-      const inPlane = relative.addScaledVector(panelNormal, -warpedDepth);
-      inPlane.multiplyScalar(layer.scale);
-      inPlane.addScaledVector(panelNormal, warpedDepth + layer.offset);
-      hullPoints.push(inPlane);
-    });
-  });
-  const geometry = new ConvexGeometry(hullPoints);
-  geometry.computeVertexNormals();
-  geometry.computeBoundingSphere();
-  panel.mesh.geometry.dispose();
-  panel.mesh.geometry = geometry;
-  panel.mesh.position.copy(center);
-  panel.mesh.quaternion.identity();
-  const pulse = 1 + Math.sin(state.experimentTime * 1.35 + panel.phase) * 0.014;
-  panel.mesh.scale.setScalar(pulse);
-  panel.mesh.material.opacity = 0.74
-    + (Math.sin(state.experimentTime * 1.18 + panel.phase) + 1) * 0.025;
-  panel.mesh.visible = true;
-}
-
-function updateSpaceVisuals() {
-  const visuals = state.experimentVisuals.space;
-  visuals.box.setFromPoints(state.trackers.map((tracker) => tracker.anchorPosition));
-  visuals.box.getSize(tempVectorC);
-  visuals.bodyHeight = Math.max(0.6, tempVectorC.y);
-  if (state.experimentTime - visuals.lastUpdate < 1 / 18) return;
-  visuals.lastUpdate = state.experimentTime;
-
-  const bodyHeight = visuals.bodyHeight;
-  const trackers = Object.fromEntries(
-    state.trackers.map((tracker) => [tracker.definition.id, tracker])
-  );
-  const trackerPoint = (id) => trackers[id]?.anchorPosition?.clone() ?? null;
-  const bonePoint = (name, fallback) => {
-    const bone = state.bones.get(name);
-    return bone ? bone.getWorldPosition(new THREE.Vector3()) : fallback?.clone() ?? null;
-  };
-  const hips = bonePoint('Hips', trackerPoint('body'));
-  const head = bonePoint('Head', trackerPoint('head'));
-  const leftShoulder = bonePoint('LeftArm', trackerPoint('leftArm'));
-  const rightShoulder = bonePoint('RightArm', trackerPoint('rightArm'));
-  const leftElbow = bonePoint('LeftForeArm', trackerPoint('leftArm'));
-  const rightElbow = bonePoint('RightForeArm', trackerPoint('rightArm'));
-  const leftHand = bonePoint('LeftHand', trackerPoint('leftHand'));
-  const rightHand = bonePoint('RightHand', trackerPoint('rightHand'));
-  const leftHip = bonePoint('LeftUpLeg', hips);
-  const rightHip = bonePoint('RightUpLeg', hips);
-  const leftKnee = bonePoint('LeftLeg', trackerPoint('leftLeg'));
-  const rightKnee = bonePoint('RightLeg', trackerPoint('rightLeg'));
-  const leftFoot = bonePoint('LeftFoot', trackerPoint('leftFoot'));
-  const rightFoot = bonePoint('RightFoot', trackerPoint('rightFoot'));
-
-  const requiredPoints = [
-    hips, head,
-    leftShoulder, rightShoulder,
-    leftElbow, rightElbow,
-    leftHand, rightHand,
-    leftHip, rightHip,
-    leftKnee, rightKnee,
-    leftFoot, rightFoot
-  ];
-  if (requiredPoints.some((point) => !point)) {
-    visuals.panels.forEach((panel) => { panel.mesh.visible = false; });
-    return;
-  }
-  const verticalAxis = head.clone().sub(hips).normalize();
-  if (verticalAxis.lengthSq() < 0.5) verticalAxis.set(0, 1, 0);
-  const horizontalAxis = rightShoulder.clone().sub(leftShoulder);
-  horizontalAxis.addScaledVector(verticalAxis, -horizontalAxis.dot(verticalAxis));
-  if (horizontalAxis.lengthSq() < 0.0001) horizontalAxis.set(1, 0, 0);
-  horizontalAxis.normalize();
-  const depthAxis = horizontalAxis.clone().cross(verticalAxis).normalize();
-  horizontalAxis.copy(verticalAxis).cross(depthAxis).normalize();
-
-  const hipPair = insetSpacePair(leftHip, rightHip, horizontalAxis, bodyHeight);
-  const kneePair = insetSpacePair(leftKnee, rightKnee, horizontalAxis, bodyHeight);
-  const footPair = insetSpacePair(leftFoot, rightFoot, horizontalAxis, bodyHeight);
-  const leftHeadEdge = head.clone().addScaledVector(horizontalAxis, -bodyHeight * 0.085);
-  const rightHeadEdge = head.clone().addScaledVector(horizontalAxis, bodyHeight * 0.085);
-  const leftTopOuter = leftHand.clone()
-    .addScaledVector(verticalAxis, bodyHeight * 0.19)
-    .addScaledVector(horizontalAxis, -bodyHeight * 0.035);
-  const rightTopOuter = rightHand.clone()
-    .addScaledVector(verticalAxis, bodyHeight * 0.19)
-    .addScaledVector(horizontalAxis, bodyHeight * 0.035);
-  const leftTopInner = leftHeadEdge.clone().addScaledVector(verticalAxis, bodyHeight * 0.18);
-  const rightTopInner = rightHeadEdge.clone().addScaledVector(verticalAxis, bodyHeight * 0.18);
-  const armClearance = bodyHeight * 0.022;
-  const leftArmLower = [leftHand, leftElbow, leftShoulder].map(
-    (point) => point.clone().addScaledVector(verticalAxis, -armClearance)
-  );
-  const rightArmLower = [rightHand, rightElbow, rightShoulder].map(
-    (point) => point.clone().addScaledVector(verticalAxis, -armClearance)
-  );
-  const leftArmUpper = [leftShoulder, leftElbow, leftHand].map(
-    (point) => point.clone().addScaledVector(verticalAxis, armClearance)
-  );
-  const rightArmUpper = [rightShoulder, rightElbow, rightHand].map(
-    (point) => point.clone().addScaledVector(verticalAxis, armClearance)
-  );
-
-  const panelPoints = {
-    betweenLegs: [
-      hipPair[0], kneePair[0], footPair[0],
-      footPair[1], kneePair[1], hipPair[1]
-    ],
-    leftArmLeg: [...leftArmLower, leftHip, leftKnee, leftFoot],
-    rightArmLeg: [...rightArmLower, rightHip, rightKnee, rightFoot],
-    leftArmHead: [leftHeadEdge, ...leftArmUpper, leftTopOuter, leftTopInner],
-    rightArmHead: [rightHeadEdge, ...rightArmUpper, rightTopOuter, rightTopInner]
-  };
-  visuals.panels.forEach((panel) => {
-    updateFlatSpacePanel(
-      panel,
-      panelPoints[panel.definition.id] ?? [],
-      horizontalAxis,
-      verticalAxis,
-      depthAxis,
-      bodyHeight
-    );
-  });
 }
 
 function updateRelationVisuals(delta) {
@@ -2405,8 +2096,14 @@ function updateRelationVisuals(delta) {
   visuals.positions[3] = focus.anchorPosition.x;
   visuals.positions[4] = focus.anchorPosition.y;
   visuals.positions[5] = focus.anchorPosition.z;
-  tempColor.copy(focus.color);
-  visuals.colors.set([0.65, 0.65, 0.65, tempColor.r, tempColor.g, tempColor.b]);
+  visuals.colors.set([
+    EXPERIMENT_RED.r,
+    EXPERIMENT_RED.g,
+    EXPERIMENT_RED.b,
+    EXPERIMENT_RED.r,
+    EXPERIMENT_RED.g,
+    EXPERIMENT_RED.b
+  ]);
   visuals.beam.geometry.attributes.instanceStart.data.needsUpdate = true;
   visuals.beam.geometry.attributes.instanceColorStart.data.needsUpdate = true;
 
@@ -2415,10 +2112,10 @@ function updateRelationVisuals(delta) {
   visuals.beam.material.opacity = 1;
   visuals.halo.position.copy(focus.anchorPosition);
   visuals.halo.quaternion.copy(camera.quaternion);
-  visuals.halo.material.color.copy(tempColor);
+  visuals.halo.material.color.copy(EXPERIMENT_RED);
   visuals.halo.scale.setScalar(0.8 + focusIntensity * 1.7);
   visuals.core.position.copy(focus.anchorPosition);
-  visuals.core.material.color.copy(tempColor);
+  visuals.core.material.color.copy(EXPERIMENT_RED);
 }
 
 function updateExperimentalVisuals(delta) {
@@ -2428,7 +2125,15 @@ function updateExperimentalVisuals(delta) {
   if (state.activeExperiments.has('curves')) updateCurveVisuals();
   if (state.activeExperiments.has('axes')) updateAxisVisuals();
   if (state.activeExperiments.has('sync')) updateSyncVisuals();
-  if (state.activeExperiments.has('space')) updateSpaceVisuals();
+  if (state.activeExperiments.has('space')) {
+    updateExternalSpacePointCloud(state.experimentVisuals.space, {
+      bones: state.bones,
+      trackers: state.trackers,
+      time: state.experimentTime,
+      pixelRatio: renderer.getPixelRatio(),
+      displayHeight: DISPLAY_HEIGHT
+    });
+  }
   if (state.activeExperiments.has('relations')) updateRelationVisuals(delta);
 }
 
@@ -2571,7 +2276,7 @@ function appendTrailPoint(tracker, point, connectToPrevious = true, refreshGeome
     point: point.clone(),
     connect: connectToPrevious && tracker.hasTrailPoint
   });
-  if (state.traceMode !== 'permanent' && tracker.trailPoints.length > TRAIL_INITIAL_CAPACITY) {
+  if (state.traceMode !== 'permanent' && tracker.trailPoints.length > FADING_TRAIL_RETENTION_LIMIT) {
     tracker.trailPoints.shift();
     if (tracker.trailPoints[0]) tracker.trailPoints[0].connect = false;
   }
@@ -2636,9 +2341,51 @@ function applyAvatarScreenOffset() {
   camera.updateProjectionMatrix();
 }
 
+function getEmbeddedAvatarCenterY() {
+  if (state.trackers.length > 0) {
+    let minimumY = Infinity;
+    let maximumY = -Infinity;
+    for (const tracker of state.trackers) {
+      minimumY = Math.min(minimumY, tracker.anchorPosition.y);
+      maximumY = Math.max(maximumY, tracker.anchorPosition.y);
+    }
+    if (Number.isFinite(minimumY) && Number.isFinite(maximumY)) {
+      return (minimumY + maximumY) * 0.5;
+    }
+  }
+
+  const head = state.bones.get('Head');
+  const leftFoot = state.bones.get('LeftFoot');
+  const rightFoot = state.bones.get('RightFoot');
+  const hips = state.bones.get('Hips');
+  if (!head || !hips) return 1.22 + state.avatarOffsetY;
+
+  head.getWorldPosition(tempVector);
+  hips.getWorldPosition(tempVectorB);
+  let lowerY = Math.min(0, tempVectorB.y);
+  if (leftFoot) {
+    leftFoot.getWorldPosition(tempVectorC);
+    lowerY = tempVectorC.y;
+  }
+  if (rightFoot) {
+    rightFoot.getWorldPosition(tempVectorC);
+    lowerY = Math.min(lowerY, tempVectorC.y);
+  }
+  return (tempVector.y + lowerY) * 0.5;
+}
+
 function fitCamera() {
-  camera.position.set(4.65 + state.avatarOffsetX, 2.55 + state.avatarOffsetY, 7.25);
-  controls.target.set(state.avatarOffsetX, 1.48 + state.avatarOffsetY, 0);
+  if (EMBEDDED_VIEW) {
+    const centerY = getEmbeddedAvatarCenterY();
+    camera.position.copy(EMBEDDED_CAMERA_OFFSET)
+      .add(new THREE.Vector3(state.avatarOffsetX, centerY, 0));
+    controls.target.set(state.avatarOffsetX, centerY, 0);
+  } else {
+    const centerY = 1.48 + state.avatarOffsetY;
+    camera.position.copy(DEFAULT_CAMERA_OFFSET)
+      .add(new THREE.Vector3(state.avatarOffsetX, centerY, 0));
+    controls.target.set(state.avatarOffsetX, 1.48 + state.avatarOffsetY, 0);
+  }
   controls.update();
   applyAvatarScreenOffset();
 }
@@ -2702,7 +2449,10 @@ function prepareModel(gltf, movement) {
 
   if (state.initialViewStatePending) {
     state.initialViewStatePending = false;
-    applyViewState(REQUESTED_GRID_CELL_STATE.view);
+    applyViewState({
+      ...(REQUESTED_GRID_CELL_STATE?.view ?? {}),
+      ...(REQUESTED_URL_VIEW_STATE ?? {})
+    });
   }
 
   if (state.initialTransportPending) {
@@ -2717,7 +2467,8 @@ function prepareModel(gltf, movement) {
     window.parent.postMessage({
       source: 'cyber-subin-avatar',
       type: 'ready',
-      movementId: movement.id
+      movementId: movement.id,
+      viewState: getCurrentViewState()
     }, window.location.origin);
   }
 }
@@ -2889,8 +2640,10 @@ function setTraceVisibility(visible) {
   ui.lineDisplayToggle.setAttribute('aria-pressed', String(visible));
   ui.lineDisplayToggle.setAttribute('aria-label', visible ? 'Turn trace display off' : 'Turn trace display on');
   ui.lineDisplayStatus.textContent = visible ? 'ON' : 'OFF';
+  if (!visible) state.trailElapsed = 0;
   state.trackers.forEach((tracker) => {
     if (visible) updateTrailGeometry(tracker);
+    else tracker.hasTrailPoint = false;
     tracker.trail.visible = visible;
     tracker.trailDots.visible = visible && state.traceDots;
   });
@@ -2932,32 +2685,30 @@ function setFloorLight(level, activeButton) {
   if (!preset) return;
   state.floorLight = level;
   ground.material.color.setHex(preset.color);
-  grid.material.opacity = preset.gridOpacity;
-  floorRings.forEach((ring) => {
-    ring.material.opacity = preset.ringOpacity;
-  });
   ui.floorLightButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
 }
 
 function setCameraControlsOpen(open) {
+  if (open) closePeerControlMenus('camera');
   state.cameraControlsOpen = open;
   ui.cameraControlsToggle.setAttribute('aria-expanded', String(open));
-  ui.cameraControlsStatus.textContent = open ? 'HIDE' : 'SHOW';
+  ui.cameraControlsStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.cameraControlsPanel.hidden = !open;
 }
 
 function setLineControlsOpen(open) {
+  if (open) closePeerControlMenus('line');
   state.lineControlsOpen = open;
   ui.lineControlsToggle.setAttribute('aria-expanded', String(open));
-  ui.lineControlsStatus.textContent = open ? 'HIDE' : 'SHOW';
+  ui.lineControlsStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.lineControlsPanel.hidden = !open;
 }
 
 function setInterfaceHidden(hidden) {
   document.body.classList.toggle('interface-hidden', hidden);
-  ui.hideAllUi.textContent = hidden ? 'SHOW ALL' : 'HIDE ALL';
+  ui.hideAllUi.textContent = hidden ? 'EXIT PRESENTATION' : 'PRESENTATION MODE';
   ui.hideAllUi.setAttribute('aria-pressed', String(hidden));
-  ui.hideAllUi.setAttribute('aria-label', hidden ? 'Show all interface controls' : 'Hide all interface controls');
+  ui.hideAllUi.setAttribute('aria-label', hidden ? 'Exit presentation mode' : 'Enter presentation mode');
   requestAnimationFrame(resize);
 }
 
@@ -2969,9 +2720,10 @@ function setControlButtonsHidden(hidden) {
 }
 
 function setVisualizationMenu(open) {
+  if (open) closePeerControlMenus('visualization');
   state.visualizationMenuOpen = open;
   ui.visualizationMenuToggle.setAttribute('aria-expanded', String(open));
-  ui.visualizationMenuStatus.textContent = open ? 'HIDE' : 'SHOW';
+  ui.visualizationMenuStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.visualizationMenuPanel.hidden = !open;
 }
 
@@ -2992,7 +2744,7 @@ function setAnalysisVisibility(visible) {
   state.analysisVisible = visible;
   ui.analysisPanel.hidden = !visible;
   ui.analysisPanelToggle.setAttribute('aria-expanded', String(visible));
-  ui.analysisPanelStatus.textContent = visible ? 'HIDE' : 'SHOW';
+  ui.analysisPanelStatus.textContent = visible ? 'OPEN' : 'SHOW';
   ui.appShell.classList.toggle('analysis-hidden', !visible);
 
   if (!visible && state.panelResizing) {
@@ -3112,17 +2864,27 @@ function updateMotionSignals(delta, shouldSample, trailSampling = null) {
     }
     tracker.previousAnchorPosition.copy(tracker.anchorPosition);
 
-    const row = ui.signalList.querySelector(`[data-signal="${tracker.definition.id}"]`);
-    for (const { key } of AXES) {
-      const value = Math.abs(tracker.coordinate[key]) < 0.0005 ? 0 : tracker.coordinate[key];
-      row.querySelector(`[data-axis-value="${key}"]`).textContent = `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
+    if (!EMBEDDED_VIEW) {
+      const row = ui.signalList.querySelector(`[data-signal="${tracker.definition.id}"]`);
+      for (const { key } of AXES) {
+        const value = Math.abs(tracker.coordinate[key]) < 0.0005 ? 0 : tracker.coordinate[key];
+        row.querySelector(`[data-axis-value="${key}"]`).textContent = `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
+      }
+      const displayAverage = Math.abs(average) < 0.0005 ? 0 : average;
+      row.querySelector('[data-axis-value="average"]').textContent = `${displayAverage >= 0 ? '+' : ''}${displayAverage.toFixed(3)}`;
     }
-    const displayAverage = Math.abs(average) < 0.0005 ? 0 : average;
-    row.querySelector('[data-axis-value="average"]').textContent = `${displayAverage >= 0 ? '+' : ''}${displayAverage.toFixed(3)}`;
   }
 
-  updateJointGeometry();
-  updateExperimentalVisuals(motionDelta);
+  if (!EMBEDDED_VIEW) updateJointGeometry();
+  if (EMBEDDED_VIEW) {
+    state.embeddedEffectElapsed += motionDelta;
+    if (state.embeddedEffectElapsed >= 1 / 30) {
+      updateExperimentalVisuals(state.embeddedEffectElapsed);
+      state.embeddedEffectElapsed = 0;
+    }
+  } else {
+    updateExperimentalVisuals(motionDelta);
+  }
 }
 
 function drawSignalCharts() {
@@ -3175,7 +2937,7 @@ function drawSignalCharts() {
 function resize() {
   const width = ui.sceneWrap.clientWidth;
   const height = ui.sceneWrap.clientHeight;
-  const pixelRatio = Math.min(window.devicePixelRatio, EMBEDDED_VIEW ? 1.25 : 2);
+  const pixelRatio = Math.min(window.devicePixelRatio, EMBEDDED_VIEW ? 1.5 : 2);
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   camera.aspect = width / Math.max(1, height);
@@ -3185,18 +2947,18 @@ function resize() {
 }
 
 function updateTransport() {
+  if (EMBEDDED_VIEW) return;
   const absoluteTime = state.action?.time ?? state.clipStart;
   const time = Math.max(0, absoluteTime - state.clipStart);
   const playableDuration = Math.max(0, state.duration - state.clipStart);
   ui.currentTime.textContent = formatTime(time);
-  ui.frameReadout.textContent = `T+ ${time.toFixed(2).padStart(5, '0')} S`;
   if (!ui.timeline.matches(':active')) ui.timeline.value = String(absoluteTime);
   const progress = playableDuration ? (time / playableDuration) * 100 : 0;
   ui.timeline.style.setProperty('--progress', `${progress}%`);
 }
 
 function notifyEmbeddedTransport(delta) {
-  if (!EMBEDDED_VIEW || !state.ready) return;
+  if (!EMBEDDED_VIEW || !EMBEDDED_TRANSPORT_SOURCE || !state.ready) return;
   state.embeddedTransportElapsed += delta;
   if (state.embeddedTransportElapsed < 0.1) return;
   state.embeddedTransportElapsed = 0;
@@ -3231,12 +2993,14 @@ function animate() {
     centerCharacter();
     if (looped) resetTrackerSamples({ preserveTrails: true });
 
-    state.sampleElapsed += rawDelta;
+    if (!EMBEDDED_VIEW) state.sampleElapsed += rawDelta;
     const trailElapsedBeforeFrame = state.trailElapsed;
-    state.trailElapsed += rawDelta;
-    const shouldSample = state.sampleElapsed >= 1 / 30;
+    if (state.traceVisible) state.trailElapsed += rawDelta;
+    const shouldSample = !EMBEDDED_VIEW && state.sampleElapsed >= 1 / 30;
     const trailInterval = 1 / state.traceSampleRate;
-    const trailSampleCount = Math.floor(state.trailElapsed / trailInterval);
+    const trailSampleCount = state.traceVisible
+      ? Math.floor(state.trailElapsed / trailInterval)
+      : 0;
     if (shouldSample) {
       state.sampleElapsed = 0;
     }
@@ -3252,6 +3016,13 @@ function animate() {
   }
 
   controls.update(rawDelta);
+  if (!EMBEDDED_VIEW && state.ready) {
+    shareUrlElapsed += rawDelta;
+    if (shareUrlElapsed >= 0.25) {
+      shareUrlElapsed = 0;
+      syncShareableUrl();
+    }
+  }
   if (state.ready && state.surfaceMode === 'points') updateAvatarPointCloud();
   if (state.ready && state.surfaceMode === 'skeleton') updateAvatarSkeleton();
   updateTransport();
@@ -3268,10 +3039,14 @@ ui.playButton.addEventListener('click', () => setPlaying(!state.playing));
 ui.resetButton.addEventListener('click', resetExperience);
 ui.sceneWrap.addEventListener('dblclick', fitCamera);
 ui.avatarStyleToggle.addEventListener('click', () => setAvatarStyleOpen(!state.avatarStyleOpen));
+ui.avatarStyleClose.addEventListener('click', () => setAvatarStyleOpen(false));
 ui.cameraOrbitToggle.addEventListener('click', () => setCameraOrbit(!state.cameraOrbit));
 ui.cameraControlsToggle.addEventListener('click', () => setCameraControlsOpen(!state.cameraControlsOpen));
+ui.cameraControlsClose.addEventListener('click', () => setCameraControlsOpen(false));
 ui.lineControlsToggle.addEventListener('click', () => setLineControlsOpen(!state.lineControlsOpen));
+ui.lineControlsClose.addEventListener('click', () => setLineControlsOpen(false));
 ui.visualizationMenuToggle.addEventListener('click', () => setVisualizationMenu(!state.visualizationMenuOpen));
+ui.visualizationMenuClose.addEventListener('click', () => setVisualizationMenu(false));
 
 ui.timeline.addEventListener('input', () => {
   if (!state.action || !state.mixer) return;
@@ -3297,6 +3072,10 @@ for (const button of ui.avatarSurfaceButtons) {
 
 for (const button of ui.lightingPresetButtons) {
   button.addEventListener('click', () => setLightingPreset(button.dataset.lightingPreset, button));
+}
+
+for (const button of ui.lightingColorButtons) {
+  button.addEventListener('click', () => setLightingColor(button.dataset.lightingColor, button));
 }
 
 for (const button of ui.cameraSpeedButtons) {
@@ -3380,6 +3159,8 @@ if (RETURN_TO_GRID) {
 }
 
 ui.analysisPanelToggle.addEventListener('click', () => setAnalysisVisibility(!state.analysisVisible));
+ui.analysisPanelClose.addEventListener('click', () => setAnalysisVisibility(false));
+ui.resetAll.addEventListener('click', resetAllSingleView);
 ui.hideControlButtons.addEventListener('click', () => setControlButtonsHidden(!document.body.classList.contains('controls-hidden')));
 ui.hideAllUi.addEventListener('click', () => setInterfaceHidden(!document.body.classList.contains('interface-hidden')));
 
@@ -3436,6 +3217,12 @@ ui.analysisResizer.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closePeerControlMenus(null);
+    if (state.analysisVisible) setAnalysisVisibility(false);
+    event.preventDefault();
+    return;
+  }
   const interactive = ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(document.activeElement?.tagName);
   if (interactive) return;
   if (event.code === 'Space') {
@@ -3465,11 +3252,12 @@ setFloorLight('off', ui.floorLightButtons.find((button) => button.dataset.floorL
 setTraceMode('permanent', ui.traceModeButtons.find((button) => button.dataset.traceMode === 'permanent'));
 setTraceDots(false, ui.traceDotButtons.find((button) => button.dataset.traceDots === 'false'));
 setTraceSmoothing(true, ui.traceSmoothingButtons.find((button) => button.dataset.traceSmoothing === 'true'));
-setTraceSampleRate(240, ui.traceSampleRateButtons.find((button) => button.dataset.traceSampleRate === '240'));
+setTraceSampleRate(30, ui.traceSampleRateButtons.find((button) => button.dataset.traceSampleRate === '30'));
 setAvatarStyleOpen(false);
-setAvatarColor('pearl', ui.avatarColorButtons.find((button) => button.dataset.avatarColor === 'pearl'));
-setAvatarSurface('smooth', ui.avatarSurfaceButtons.find((button) => button.dataset.avatarSurface === 'smooth'));
-setLightingPreset('studio', ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === 'studio'));
+setAvatarColor(DEFAULT_AVATAR_COLOR, ui.avatarColorButtons.find((button) => button.dataset.avatarColor === DEFAULT_AVATAR_COLOR));
+setAvatarSurface(DEFAULT_SURFACE_MODE, ui.avatarSurfaceButtons.find((button) => button.dataset.avatarSurface === DEFAULT_SURFACE_MODE));
+setLightingPreset(DEFAULT_LIGHTING_PRESET, ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === DEFAULT_LIGHTING_PRESET));
+setLightingColor(DEFAULT_LIGHTING_COLOR, ui.lightingColorButtons.find((button) => button.dataset.lightingColor === DEFAULT_LIGHTING_COLOR));
 setCameraControlsOpen(false);
 setLineControlsOpen(false);
 setVisualizationMenu(false);
@@ -3483,7 +3271,8 @@ renderer.setAnimationLoop(animate);
 
 const requestedEffect = PAGE_PARAMS.get('effect');
 if (PAGE_PARAMS.has('effect')) setExperimentMode(requestedEffect);
-if (Number.isFinite(REQUESTED_SPEED) && REQUESTED_SPEED > 0) setPlaybackSpeed(REQUESTED_SPEED);
+setPlaybackSpeed(Number.isFinite(REQUESTED_SPEED) && REQUESTED_SPEED > 0 ? REQUESTED_SPEED : DEFAULT_SPEED);
 const requestedMovement = PAGE_PARAMS.get('movement');
 const requestedIndex = MOVEMENTS.findIndex((movement) => movement.id === requestedMovement);
-loadModel(requestedIndex >= 0 ? requestedIndex : 0);
+const defaultMovementIndex = MOVEMENTS.findIndex((movement) => movement.id === DEFAULT_MOVEMENT_ID);
+loadModel(requestedIndex >= 0 ? requestedIndex : defaultMovementIndex);

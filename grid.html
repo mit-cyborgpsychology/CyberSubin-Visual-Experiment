@@ -19,10 +19,15 @@
         <div class="grid-topbar-spacer" aria-hidden="true"></div>
 
         <nav class="view-switcher" aria-label="View navigation">
-          <button id="hide-control-buttons" type="button" aria-pressed="false">HIDE BUTTONS</button>
-          <button id="hide-all-ui" type="button" aria-pressed="false">HIDE ALL</button>
-          <a id="single-view-link" href="/">SINGLE VIEW</a>
-          <a class="active" href="/grid.html" aria-current="page">GRID VIEW</a>
+          <div class="nav-utility-group" aria-label="Grid and display utilities">
+            <button id="reset-all" class="nav-action nav-action--reset" type="button">RESET ALL</button>
+            <button id="hide-control-buttons" class="nav-action" type="button" aria-pressed="false">HIDE BUTTONS</button>
+            <button id="hide-all-ui" class="nav-action" type="button" aria-pressed="false">PRESENTATION MODE</button>
+          </div>
+          <div class="nav-view-group" aria-label="Choose view">
+            <a id="single-view-link" class="view-tab" href="/">SINGLE VIEW</a>
+            <a class="view-tab active" href="/grid.html" aria-current="page">GRID VIEW</a>
+          </div>
         </nav>
       </header>
 
@@ -31,14 +36,21 @@
           <label for="global-avatar">AVATAR FOR ALL SIX</label>
           <select id="global-avatar" aria-label="Select one avatar for all six cells"></select>
           <button id="apply-avatar-all" type="button">SAME AVATAR ×6</button>
+          <button id="random-avatar-all" type="button">RANDOM 1–59</button>
         </div>
 
         <div class="global-control-group global-control-group--effect">
           <label for="global-effect">EFFECT FOR ALL SIX</label>
           <select id="global-effect" aria-label="Select one effect for all six cells"></select>
           <button id="apply-effect-all" type="button">SAME EFFECT ×6</button>
+          <button id="distribute-effects" type="button">No. 60 1→6</button>
         </div>
 
+        <div class="global-control-group global-control-group--master" aria-label="Master settings controls">
+          <span>MASTER · CELL 01</span>
+          <button id="edit-master-settings" type="button">EDIT MASTER</button>
+          <button id="apply-settings-all" type="button">APPLY SETTINGS ×6</button>
+        </div>
       </section>
 
       <section id="avatar-grid" class="avatar-grid" aria-label="Six avatar comparison grid"></section>
@@ -69,10 +81,10 @@
           <button type="button" data-grid-speed="0.05">0.05×</button>
           <button type="button" data-grid-speed="0.1">0.1×</button>
           <button type="button" data-grid-speed="0.5">0.5×</button>
-          <button type="button" data-grid-speed="1" class="active">1×</button>
+          <button type="button" data-grid-speed="1">1×</button>
           <button type="button" data-grid-speed="1.5">1.5×</button>
           <button type="button" data-grid-speed="2">2×</button>
-          <button type="button" data-grid-speed="3">3×</button>
+          <button type="button" data-grid-speed="3" class="active">3×</button>
           <button type="button" data-grid-speed="4">4×</button>
           <button type="button" data-grid-speed="5">5×</button>
         </div>

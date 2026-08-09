@@ -29,10 +29,15 @@
         </div>
 
         <nav class="view-switcher" aria-label="View navigation">
-          <button id="hide-control-buttons" type="button" aria-pressed="false">HIDE BUTTONS</button>
-          <button id="hide-all-ui" type="button" aria-pressed="false">HIDE ALL</button>
-          <a class="active" href="/" aria-current="page">SINGLE VIEW</a>
-          <a id="grid-view-link" href="/grid.html">GRID VIEW</a>
+          <div class="nav-utility-group" aria-label="Display utilities">
+            <button id="reset-all" class="nav-action nav-action--reset" type="button">RESET ALL</button>
+            <button id="hide-control-buttons" class="nav-action" type="button" aria-pressed="false">HIDE BUTTONS</button>
+            <button id="hide-all-ui" class="nav-action" type="button" aria-pressed="false">PRESENTATION MODE</button>
+          </div>
+          <div class="nav-view-group" aria-label="Choose view">
+            <a class="view-tab active" href="/" aria-current="page">SINGLE VIEW</a>
+            <a id="grid-view-link" class="view-tab" href="/grid.html">GRID VIEW</a>
+          </div>
         </nav>
       </header>
 
@@ -47,10 +52,6 @@
               <strong id="loading-progress">0%</strong>
             </div>
 
-            <div class="viewer-readout viewer-readout--top">
-              <span id="frame-readout">T+ 00.00 S</span>
-            </div>
-
             <div id="viewer-options" class="viewer-options">
               <section class="control-section control-section--avatar-style" aria-label="Avatar appearance controls">
                 <button
@@ -63,10 +64,14 @@
                   <span>AVATAR STYLE</span><strong id="avatar-style-status">SHOW</strong>
                 </button>
                 <div id="avatar-style-panel" class="control-section-panel avatar-style-panel" hidden>
+                  <div class="menu-panel-header">
+                    <span>AVATAR STYLE</span>
+                    <button id="avatar-style-close" class="menu-panel-close" type="button" aria-label="Close Avatar Style">×</button>
+                  </div>
                   <div class="avatar-style-control" aria-label="Avatar color, surface and lighting presets">
-                    <div class="trace-option-group" aria-label="Avatar color">
+                    <div class="trace-option-group option-grid--three" aria-label="Avatar color">
                       <span>COLOR</span>
-                      <button type="button" data-avatar-color="pearl" class="active">PEARL</button>
+                      <button type="button" data-avatar-color="pearl">PEARL</button>
                       <button type="button" data-avatar-color="cyan">CYAN</button>
                       <button type="button" data-avatar-color="blue">BLUE</button>
                       <button type="button" data-avatar-color="violet">VIOLET</button>
@@ -74,21 +79,44 @@
                       <button type="button" data-avatar-color="gold">GOLD</button>
                       <button type="button" data-avatar-color="lime">LIME</button>
                       <button type="button" data-avatar-color="coral">CORAL</button>
+                      <button type="button" data-avatar-color="black">BLACK</button>
+                      <button type="button" data-avatar-color="darkGrey">DARK GREY</button>
+                      <button type="button" data-avatar-color="grey">GREY</button>
+                      <button type="button" data-avatar-color="lightGrey" class="active">LIGHT GREY</button>
                     </div>
-                    <div class="trace-option-group" aria-label="Avatar surface">
+                    <div class="trace-option-group option-row--compact option-row--four" aria-label="Avatar surface">
                       <span>SURFACE</span>
                       <button type="button" data-avatar-surface="smooth" class="active">SMOOTH</button>
                       <button type="button" data-avatar-surface="rough">ROUGH</button>
                       <button type="button" data-avatar-surface="points">POINT CLOUD</button>
                       <button type="button" data-avatar-surface="skeleton">SKELETON</button>
                     </div>
-                    <div class="trace-option-group" aria-label="Avatar lighting">
+                    <div class="trace-option-group option-grid--three" aria-label="Avatar lighting">
                       <span>LIGHTING</span>
-                      <button type="button" data-lighting-preset="studio" class="active">STUDIO</button>
+                      <button type="button" data-lighting-preset="studio">STUDIO</button>
                       <button type="button" data-lighting-preset="bright">BRIGHT</button>
+                      <button type="button" data-lighting-preset="softFront">SOFT FRONT</button>
                       <button type="button" data-lighting-preset="side">SIDE LIGHT</button>
+                      <button type="button" data-lighting-preset="highSide">HIGH SIDE</button>
+                      <button type="button" data-lighting-preset="cross">CROSS LIGHT</button>
+                      <button type="button" data-lighting-preset="lowKey">LOW KEY</button>
+                      <button type="button" data-lighting-preset="top" class="active">TOP LIGHT</button>
                       <button type="button" data-lighting-preset="rim">RIM</button>
+                      <button type="button" data-lighting-preset="softSilhouette">SOFT SIL</button>
+                      <button type="button" data-lighting-preset="backlight">BACKLIGHT</button>
                       <button type="button" data-lighting-preset="silhouette">SILHOUETTE</button>
+                    </div>
+                    <div class="trace-option-group option-grid--three" aria-label="Lighting color">
+                      <span>LIGHT COLOR</span>
+                      <button type="button" data-lighting-color="neutral">NEUTRAL</button>
+                      <button type="button" data-lighting-color="ivory">IVORY</button>
+                      <button type="button" data-lighting-color="warm">SOFT WARM</button>
+                      <button type="button" data-lighting-color="amber">MUTED AMBER</button>
+                      <button type="button" data-lighting-color="cool" class="active">SOFT COOL</button>
+                      <button type="button" data-lighting-color="mist">MIST</button>
+                      <button type="button" data-lighting-color="sage">SAGE</button>
+                      <button type="button" data-lighting-color="blush">BLUSH</button>
+                      <button type="button" data-lighting-color="lavender">LAVENDER</button>
                     </div>
                   </div>
                 </div>
@@ -105,6 +133,10 @@
                   <span>CAMERA CONTROLS</span><strong id="camera-controls-status">SHOW</strong>
                 </button>
                 <div id="camera-controls-panel" class="control-section-panel" hidden>
+                  <div class="menu-panel-header">
+                    <span>CAMERA CONTROLS</span>
+                    <button id="camera-controls-close" class="menu-panel-close" type="button" aria-label="Close Camera Controls">×</button>
+                  </div>
                   <div class="camera-control" aria-label="Automatic camera orbit controls">
                     <button
                       id="camera-orbit-toggle"
@@ -119,14 +151,14 @@
                       <span>AUTO ORBIT</span>
                       <strong id="camera-orbit-status">OFF</strong>
                     </button>
-                    <div class="camera-speed-control" aria-label="Camera rotation speed">
+                    <div class="camera-speed-control option-row--compact option-row--four" aria-label="Camera rotation speed">
                       <span>CAMERA SPEED</span>
                       <button type="button" data-camera-speed="0.25">0.25×</button>
                       <button type="button" data-camera-speed="0.5">0.5×</button>
                       <button type="button" data-camera-speed="1" class="active">1×</button>
                       <button type="button" data-camera-speed="2">2×</button>
                     </div>
-                    <div class="camera-direction-control" aria-label="Camera rotation direction">
+                    <div class="camera-direction-control option-row--compact option-row--two" aria-label="Camera rotation direction">
                       <span>DIRECTION</span>
                       <button type="button" data-camera-direction="1" class="active" aria-label="Rotate clockwise">CW</button>
                       <button type="button" data-camera-direction="-1" aria-label="Rotate counterclockwise">CCW</button>
@@ -144,7 +176,7 @@
                   </div>
 
                   <div class="environment-control environment-control--camera" aria-label="Scene lighting controls">
-                    <div class="floor-light-control" aria-label="Floor light level">
+                    <div class="floor-light-control option-row--compact option-row--four" aria-label="Floor light level">
                       <span>FLOOR LIGHT</span>
                       <button type="button" data-floor-light="off" class="active">OFF</button>
                       <button type="button" data-floor-light="low">LOW</button>
@@ -188,8 +220,12 @@
                   </button>
                 </div>
                 <div id="line-controls-panel" class="control-section-panel" hidden>
+                  <div class="menu-panel-header">
+                    <span>TRACE CONTROLS</span>
+                    <button id="line-controls-close" class="menu-panel-close" type="button" aria-label="Close Trace Controls">×</button>
+                  </div>
                   <div class="trace-control" aria-label="3D trace appearance controls">
-                    <div class="trace-option-group" aria-label="Trace retention">
+                    <div class="trace-option-group option-grid--three" aria-label="Trace retention">
                       <span>TRACE</span>
                       <button type="button" data-trace-mode="permanent" class="active">PERMANENT</button>
                       <button type="button" data-trace-mode="long">FADE 15S</button>
@@ -198,7 +234,7 @@
                       <button type="button" data-trace-mode="brief">FADE 1.5S</button>
                       <button type="button" data-trace-mode="instant">FADE 1S</button>
                     </div>
-                    <div class="trace-option-group trace-width-control" aria-label="Trace line width">
+                    <div class="trace-option-group trace-width-control option-row--compact option-row--three" aria-label="Trace line width">
                       <span>WIDTH</span>
                       <button type="button" data-trace-width="1.25" class="active">THIN</button>
                       <button type="button" data-trace-width="2.5">MEDIUM</button>
@@ -207,17 +243,17 @@
                   </div>
 
                   <div class="trace-style-control" aria-label="3D trace rendering controls">
-                    <div class="trace-option-group" aria-label="Trace visibility">
+                    <div class="trace-option-group option-row--compact option-row--two" aria-label="Trace visibility">
                       <span>DISPLAY</span>
                       <button type="button" data-trace-visible="true">ON</button>
                       <button type="button" data-trace-visible="false" class="active">OFF</button>
                     </div>
-                    <div class="trace-option-group" aria-label="Trace point display">
+                    <div class="trace-option-group option-row--compact option-row--two" aria-label="Trace point display">
                       <span>POINTS</span>
                       <button type="button" data-trace-dots="true">DOTS + LINE</button>
                       <button type="button" data-trace-dots="false" class="active">LINE ONLY</button>
                     </div>
-                    <div class="trace-option-group" aria-label="Trace path smoothing">
+                    <div class="trace-option-group option-row--compact option-row--two" aria-label="Trace path smoothing">
                       <span>PATH</span>
                       <button type="button" data-trace-smoothing="false">RAW</button>
                       <button type="button" data-trace-smoothing="true" class="active">SMOOTH</button>
@@ -225,16 +261,16 @@
                   </div>
 
                   <div class="environment-control environment-control--line" aria-label="Trace sampling controls">
-                    <div class="trace-sampling-control" aria-label="Line sampling rate">
+                    <div class="trace-sampling-control option-grid--two" aria-label="Line sampling rate">
                       <span>LINE SAMPLE RATE</span>
                       <button type="button" data-trace-sample-rate="5">5 HZ</button>
                       <button type="button" data-trace-sample-rate="10">10 HZ</button>
                       <button type="button" data-trace-sample-rate="20">20 HZ</button>
-                      <button type="button" data-trace-sample-rate="30">30 HZ</button>
+                      <button type="button" data-trace-sample-rate="30" class="active">30 HZ</button>
                       <button type="button" data-trace-sample-rate="60">60 HZ</button>
                       <button type="button" data-trace-sample-rate="90">90 HZ</button>
                       <button type="button" data-trace-sample-rate="120">120 HZ</button>
-                      <button type="button" data-trace-sample-rate="240" class="active">240 HZ</button>
+                      <button type="button" data-trace-sample-rate="240">240 HZ</button>
                     </div>
                   </div>
                 </div>
@@ -264,7 +300,11 @@
                 <span>No. 60 ELEMENTS</span><strong id="visualization-menu-status">SHOW</strong>
               </button>
               <div id="visualization-menu-panel" class="visualization-menu-panel" hidden>
-                <div class="experiment-control" aria-label="Movement visualization lenses">
+                <div class="menu-panel-header">
+                  <span>No. 60 ELEMENTS</span>
+                  <button id="visualization-menu-close" class="menu-panel-close" type="button" aria-label="Close No. 60 Elements">×</button>
+                </div>
+                <div class="experiment-control option-grid--two" aria-label="Movement visualization lenses">
                   <span>MOVEMENT LENS</span>
                   <button type="button" data-experiment="energy" title="Force, momentum, acceleration and deceleration">ENERGY</button>
                   <button type="button" data-experiment="curves" title="Circular pathways, arcs and curved versus linear motion">CIRCLES + CURVES</button>
@@ -287,10 +327,6 @@
               <i></i>
             </div>
 
-            <div class="signal-legend" aria-label="Motion path legend">
-              <span><i style="--signal:#65f3ff"></i>LEFT + RIGHT TRACKS</span>
-              <span><i style="--signal:#a98bff"></i>FULL MOTION PATH</span>
-            </div>
           </div>
         </section>
 
@@ -308,7 +344,8 @@
           ><span></span></div>
           <div class="analysis-heading">
             <span>01</span>
-            <div><h2>XYZ MOTION ANALYSIS</h2><p>ROLLING 9-SECOND DISPLACEMENT</p></div>
+            <div><h2>MOTION ANALYSIS</h2><p>ROLLING 9-SECOND DISPLACEMENT</p></div>
+            <button id="analysis-panel-close" class="menu-panel-close analysis-panel-close" type="button" aria-label="Close Motion Analysis">×</button>
           </div>
 
           <p class="analysis-intro">
@@ -365,10 +402,10 @@
           <button type="button" data-speed="0.05">0.05×</button>
           <button type="button" data-speed="0.1">0.1×</button>
           <button type="button" data-speed="0.5">0.5×</button>
-          <button type="button" data-speed="1" class="active">1×</button>
+          <button type="button" data-speed="1">1×</button>
           <button type="button" data-speed="1.5">1.5×</button>
           <button type="button" data-speed="2">2×</button>
-          <button type="button" data-speed="3">3×</button>
+          <button type="button" data-speed="3" class="active">3×</button>
           <button type="button" data-speed="4">4×</button>
           <button type="button" data-speed="5">5×</button>
         </div>

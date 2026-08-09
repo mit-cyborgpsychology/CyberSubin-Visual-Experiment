@@ -1,7 +1,10 @@
 import { posture } from '../59.ts';
+import { writeViewStateToParams } from './view-url.js';
 import './grid.css';
 
 const MODEL_COUNT = 59;
+const DEFAULT_MOVEMENT_ID = '59';
+const DEFAULT_SPEED = 3;
 const GRID_STATE_KEY = 'cyber-subin-six-avatar-state';
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const EXTRA_MODEL_URLS = import.meta.glob('../models/*.glb', {
@@ -58,7 +61,12 @@ const ui = {
   globalAvatar: document.querySelector('#global-avatar'),
   globalEffect: document.querySelector('#global-effect'),
   applyAvatarAll: document.querySelector('#apply-avatar-all'),
+  randomAvatarAll: document.querySelector('#random-avatar-all'),
   applyEffectAll: document.querySelector('#apply-effect-all'),
+  distributeEffects: document.querySelector('#distribute-effects'),
+  editMasterSettings: document.querySelector('#edit-master-settings'),
+  applySettingsAll: document.querySelector('#apply-settings-all'),
+  resetAll: document.querySelector('#reset-all'),
   playAll: document.querySelector('#play-all'),
   restartAll: document.querySelector('#restart-all'),
   currentTime: document.querySelector('#grid-current-time'),
@@ -72,7 +80,7 @@ const ui = {
 
 const transportState = {
   playing: restoredGridState?.transport?.playing ?? true,
-  speed: Number(restoredGridState?.transport?.speed) || 1,
+  speed: Number(restoredGridState?.transport?.speed) || DEFAULT_SPEED,
   progress: Math.max(0, Math.min(1, Number(restoredGridState?.transport?.progress) || 0)),
   scrubbing: false,
   resumeAfterScrub: false
@@ -138,6 +146,17 @@ function experimentsForEffect(effect) {
   return EFFECTS.some((candidate) => candidate.id === effect) ? [effect] : [];
 }
 
+function embeddedAvatarUrl(movement, effect, index, viewState = null) {
+  const params = new URLSearchParams({
+    embedded: '1',
+    transport: index === 0 ? '1' : '0',
+    movement,
+    effect
+  });
+  if (viewState) writeViewStateToParams(params, viewState);
+  return `/?${params}`;
+}
+
 function sendCommand(cell, action, value) {
   cell.iframe.contentWindow?.postMessage({
     source: 'cyber-subin-grid',
@@ -168,9 +187,9 @@ function setAllSpeed(speed) {
 
 function setInterfaceHidden(hidden) {
   document.body.classList.toggle('interface-hidden', hidden);
-  ui.hideAllUi.textContent = hidden ? 'SHOW ALL' : 'HIDE ALL';
+  ui.hideAllUi.textContent = hidden ? 'EXIT PRESENTATION' : 'PRESENTATION MODE';
   ui.hideAllUi.setAttribute('aria-pressed', String(hidden));
-  ui.hideAllUi.setAttribute('aria-label', hidden ? 'Show all interface controls' : 'Hide all interface controls');
+  ui.hideAllUi.setAttribute('aria-label', hidden ? 'Exit presentation mode' : 'Enter presentation mode');
 }
 
 function setControlButtonsHidden(hidden) {
@@ -180,7 +199,7 @@ function setControlButtonsHidden(hidden) {
   ui.hideControlButtons.setAttribute('aria-label', hidden ? 'Show grid control buttons' : 'Hide grid control buttons');
 }
 
-function saveGridState(focusedIndex) {
+function saveGridState(focusedIndex = restoredGridState?.focusedIndex ?? null) {
   const snapshot = {
     focusedIndex,
     globalAvatar: ui.globalAvatar.value,
@@ -218,13 +237,19 @@ function openCellInSingleView(index) {
     playing: String(transportState.playing),
     from: 'grid'
   });
+  writeViewStateToParams(
+    params,
+    cell.viewState ?? { experiments: experimentsForEffect(cell.effectSelect.value) }
+  );
   window.location.assign(`/?${params}`);
 }
 
 const requestedMovement = PAGE_PARAMS.get('movement');
 const restoredFirstMovement = restoredGridState?.cells?.[0]?.movement;
 const initialMovement = restoredFirstMovement || requestedMovement;
-const defaultMovement = MOVEMENTS.some((movement) => movement.id === initialMovement) ? initialMovement : '1';
+const defaultMovement = MOVEMENTS.some((movement) => movement.id === initialMovement)
+  ? initialMovement
+  : DEFAULT_MOVEMENT_ID;
 
 appendMovementOptions(ui.globalAvatar);
 appendEffectOptions(ui.globalEffect);
@@ -286,6 +311,14 @@ const cells = Array.from({ length: 6 }, (_, index) => {
   stateLabel.className = 'avatar-card__state';
   stateLabel.textContent = 'LOADING';
 
+  const applyStyleButton = document.createElement('button');
+  applyStyleButton.className = 'avatar-card__apply-style';
+  applyStyleButton.type = 'button';
+  applyStyleButton.disabled = true;
+  applyStyleButton.setAttribute('aria-label', `Apply cell ${index + 1} style to all six avatars`);
+  applyStyleButton.title = 'Apply this visual style to all six avatars';
+  applyStyleButton.textContent = 'STYLE ×6';
+
   const openButton = document.createElement('button');
   openButton.className = 'avatar-card__open';
   openButton.type = 'button';
@@ -293,23 +326,41 @@ const cells = Array.from({ length: 6 }, (_, index) => {
   openButton.title = 'Open in single view';
   openButton.textContent = '↗';
 
-  header.append(indexLabel, avatarLabel, effectLabel, stateLabel, openButton);
+  header.append(indexLabel, avatarLabel, effectLabel, stateLabel, applyStyleButton, openButton);
 
   const iframe = document.createElement('iframe');
   iframe.className = 'avatar-frame';
   iframe.title = `Avatar ${index + 1} movement visualization`;
   iframe.setAttribute('allow', 'autoplay');
-  iframe.src = `/?embedded=1&movement=${encodeURIComponent(cellMovement)}&effect=${cellEffect === 'custom' ? 'off' : cellEffect}`;
+  iframe.src = embeddedAvatarUrl(
+    cellMovement,
+    cellEffect === 'custom' ? 'off' : cellEffect,
+    index,
+    cellViewState
+  );
 
   card.append(header, iframe);
   ui.grid.append(card);
 
-  const cell = { card, iframe, avatarSelect, effectSelect, stateLabel, openButton, viewState: cellViewState };
+  const cell = {
+    card,
+    iframe,
+    avatarSelect,
+    effectSelect,
+    stateLabel,
+    applyStyleButton,
+    openButton,
+    viewState: cellViewState
+  };
 
   avatarSelect.addEventListener('change', () => {
+    cell.viewState = structuredClone(
+      cell.viewState ?? { experiments: experimentsForEffect(effectSelect.value) }
+    );
     card.classList.remove('ready');
     stateLabel.textContent = 'LOADING';
     sendCommand(cell, 'movement', avatarSelect.value);
+    saveGridState();
   });
 
   effectSelect.addEventListener('change', () => {
@@ -318,6 +369,7 @@ const cells = Array.from({ length: 6 }, (_, index) => {
     cell.viewState = { ...(cell.viewState ?? {}), experiments };
     sendCommand(cell, 'effect', effectSelect.value);
   });
+  applyStyleButton.addEventListener('click', () => applyCellStyleToAll(index));
   openButton.addEventListener('click', () => openCellInSingleView(index));
 
   return cell;
@@ -325,6 +377,118 @@ const cells = Array.from({ length: 6 }, (_, index) => {
 
 let synchronizationPending = true;
 let pendingTransportState = restoredGridState ? { ...transportState } : null;
+
+function prepareSynchronizedReload() {
+  synchronizationPending = true;
+  pendingTransportState = {
+    playing: transportState.playing,
+    speed: transportState.speed,
+    progress: transportState.progress
+  };
+}
+
+function randomizeIndexedMovements() {
+  const randomizedIds = INDEXED_MOVEMENTS.map((movement) => movement.id);
+  for (let index = randomizedIds.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [randomizedIds[index], randomizedIds[swapIndex]] = [randomizedIds[swapIndex], randomizedIds[index]];
+  }
+
+  prepareSynchronizedReload();
+  cells.forEach((cell, index) => {
+    const movement = randomizedIds[index];
+    cell.viewState = structuredClone(
+      cell.viewState ?? { experiments: experimentsForEffect(cell.effectSelect.value) }
+    );
+    cell.avatarSelect.value = movement;
+    cell.card.classList.remove('ready');
+    cell.stateLabel.textContent = 'LOADING';
+    sendCommand(cell, 'movement', movement);
+  });
+  ui.globalAvatar.value = randomizedIds[0];
+  saveGridState();
+}
+
+function distributeNo60Elements() {
+  cells.forEach((cell, index) => {
+    const effect = DEFAULT_EFFECTS[index];
+    cell.effectSelect.value = effect;
+    cell.viewState = { ...(cell.viewState ?? {}), experiments: [effect] };
+    sendCommand(cell, 'effect', effect);
+  });
+  ui.globalEffect.value = DEFAULT_EFFECTS[0];
+}
+
+function applyCellStyleToAll(sourceIndex) {
+  const sourceCell = cells[sourceIndex];
+  const sourceView = sourceCell?.viewState;
+  if (!sourceView) {
+    openCellInSingleView(sourceIndex);
+    return;
+  }
+
+  const { experiments: _sourceExperiments, ...sourceStyle } = sourceView;
+  cells.forEach((cell) => {
+    const experiments = cell.viewState?.experiments ?? experimentsForEffect(cell.effectSelect.value);
+    cell.viewState = {
+      ...cell.viewState,
+      ...structuredClone(sourceStyle),
+      experiments: [...experiments]
+    };
+    sendCommand(cell, 'viewState', cell.viewState);
+  });
+
+  sourceCell.applyStyleButton.classList.add('applied');
+  sourceCell.applyStyleButton.textContent = 'APPLIED';
+  window.setTimeout(() => {
+    sourceCell.applyStyleButton.classList.remove('applied');
+    sourceCell.applyStyleButton.textContent = 'STYLE ×6';
+  }, 900);
+}
+
+function applyMasterSettingsToAll() {
+  applyCellStyleToAll(0);
+}
+
+function resetAllGridSettings() {
+  try {
+    window.sessionStorage.removeItem(GRID_STATE_KEY);
+  } catch {
+    // Reset still works if temporary browser storage is unavailable.
+  }
+
+  setInterfaceHidden(false);
+  setControlButtonsHidden(false);
+  ui.globalAvatar.value = DEFAULT_MOVEMENT_ID;
+  ui.globalEffect.value = DEFAULT_EFFECTS[0];
+  transportState.playing = true;
+  transportState.speed = DEFAULT_SPEED;
+  transportState.progress = 0;
+  transportState.scrubbing = false;
+  transportState.resumeAfterScrub = false;
+  ui.playAll.textContent = 'PAUSE ALL';
+  ui.playAll.setAttribute('aria-label', 'Pause all animations');
+  ui.playAll.classList.remove('active');
+  ui.timeline.value = '0';
+  ui.timeline.style.setProperty('--progress', '0%');
+  ui.currentTime.textContent = '00:00.00';
+  ui.totalTime.textContent = '/ 00:00.00';
+  ui.speedButtons.forEach((button) => {
+    button.classList.toggle('active', Number(button.dataset.gridSpeed) === DEFAULT_SPEED);
+  });
+
+  synchronizationPending = true;
+  pendingTransportState = { playing: true, speed: DEFAULT_SPEED, progress: 0 };
+  cells.forEach((cell, index) => {
+    const effect = DEFAULT_EFFECTS[index];
+    cell.avatarSelect.value = DEFAULT_MOVEMENT_ID;
+    cell.effectSelect.value = effect;
+    cell.viewState = null;
+    cell.card.classList.remove('ready');
+    cell.stateLabel.textContent = 'LOADING';
+    cell.iframe.src = embeddedAvatarUrl(DEFAULT_MOVEMENT_ID, effect, index);
+  });
+}
 
 ui.singleViewLink.href = `/?movement=${encodeURIComponent(cells[0].avatarSelect.value)}`;
 ui.singleViewLink.addEventListener('click', (event) => {
@@ -343,22 +507,27 @@ ui.speedButtons.forEach((button) => {
 });
 
 ui.applyAvatarAll.addEventListener('click', () => {
-  synchronizationPending = true;
-  pendingTransportState = {
-    playing: transportState.playing,
-    speed: transportState.speed,
-    progress: transportState.progress
-  };
-  for (const cell of cells) {
-    const experiments = cell.viewState?.experiments ?? experimentsForEffect(cell.effectSelect.value);
+  prepareSynchronizedReload();
+  for (const [index, cell] of cells.entries()) {
+    const preservedViewState = structuredClone(
+      cell.viewState ?? { experiments: experimentsForEffect(cell.effectSelect.value) }
+    );
     cell.avatarSelect.value = ui.globalAvatar.value;
-    cell.viewState = { experiments: [...experiments] };
+    cell.viewState = preservedViewState;
     cell.card.classList.remove('ready');
     cell.stateLabel.textContent = 'LOADING';
     const iframeEffect = cell.effectSelect.value === 'custom' ? 'off' : cell.effectSelect.value;
-    cell.iframe.src = `/?embedded=1&movement=${encodeURIComponent(ui.globalAvatar.value)}&effect=${encodeURIComponent(iframeEffect)}`;
+    cell.iframe.src = embeddedAvatarUrl(
+      ui.globalAvatar.value,
+      iframeEffect,
+      index,
+      preservedViewState
+    );
   }
+  saveGridState();
 });
+
+ui.randomAvatarAll.addEventListener('click', randomizeIndexedMovements);
 
 ui.applyEffectAll.addEventListener('click', () => {
   for (const cell of cells) {
@@ -367,6 +536,11 @@ ui.applyEffectAll.addEventListener('click', () => {
     sendCommand(cell, 'effect', ui.globalEffect.value);
   }
 });
+
+ui.distributeEffects.addEventListener('click', distributeNo60Elements);
+ui.editMasterSettings.addEventListener('click', () => openCellInSingleView(0));
+ui.applySettingsAll.addEventListener('click', applyMasterSettingsToAll);
+ui.resetAll.addEventListener('click', resetAllGridSettings);
 
 ui.playAll.addEventListener('click', () => setAllPlaying(!transportState.playing));
 ui.hideControlButtons.addEventListener('click', () => setControlButtonsHidden(!document.body.classList.contains('controls-hidden')));
@@ -426,6 +600,10 @@ window.addEventListener('message', (event) => {
   if (event.data.type !== 'ready') return;
   cell.card.classList.add('ready');
   cell.stateLabel.textContent = 'LIVE';
+  cell.applyStyleButton.disabled = false;
+  if (!cell.viewState && event.data.viewState && typeof event.data.viewState === 'object') {
+    cell.viewState = structuredClone(event.data.viewState);
+  }
   if (cell.viewState) sendCommand(cell, 'viewState', cell.viewState);
 
   if (synchronizationPending && cells.every((candidate) => candidate.card.classList.contains('ready'))) {
