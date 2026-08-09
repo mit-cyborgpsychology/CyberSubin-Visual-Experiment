@@ -1,11 +1,19 @@
 const STRING_PARAMETERS = [
   'avatarColor',
+  'avatarGradientTop',
+  'avatarGradientMiddle',
+  'avatarGradientBottom',
   'surfaceMode',
   'lightingPreset',
   'lightingColor',
+  'lightingCustomColor',
   'traceMode',
   'floorLight',
-  'graphMode'
+  'graphMode',
+  'flowFieldGradient',
+  'flowFieldColorStart',
+  'flowFieldColorMiddle',
+  'flowFieldColorEnd'
 ];
 
 const NUMBER_PARAMETERS = [
@@ -15,7 +23,22 @@ const NUMBER_PARAMETERS = [
   'avatarOffsetY',
   'cameraOrbitSpeed',
   'cameraOrbitDirection',
-  'analysisWidth'
+  'analysisWidth',
+  'lightingIntensity',
+  'flowFieldSpeed',
+  'flowFieldCount',
+  'flowFieldThickness',
+  'flowFieldOpacity',
+  'flowFieldTrailLength',
+  'flowFieldTrailFade',
+  'flowFieldStrokeLength',
+  'flowFieldCurvature',
+  'flowFieldColorVariation',
+  'flowFieldInfluence',
+  'flowFieldBodyFlow',
+  'flowFieldRecovery',
+  'flowFieldProximityFade',
+  'flowFieldConcentration'
 ];
 
 const BOOLEAN_PARAMETERS = [
@@ -29,6 +52,8 @@ const BOOLEAN_PARAMETERS = [
   'cameraControlsOpen',
   'lineControlsOpen',
   'visualizationMenuOpen',
+  'flowFieldEnabled',
+  'flowFieldMenuOpen',
   'controlsHidden',
   'interfaceHidden'
 ];

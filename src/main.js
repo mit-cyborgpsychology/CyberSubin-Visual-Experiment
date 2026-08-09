@@ -12,6 +12,13 @@ import {
   createExternalSpacePointCloud,
   updateExternalSpacePointCloud
 } from './external-space.js';
+import {
+  FLOW_FIELD_GRADIENTS,
+  createFlowField,
+  resetFlowField,
+  setFlowFieldOptions,
+  updateFlowField
+} from './flow-field.js';
 import { readViewStateFromParams, writeViewStateToParams } from './view-url.js';
 import { posture } from '../59.ts';
 import './styles.css';
@@ -53,9 +60,100 @@ const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
 const DEFAULT_SPEED = 3;
 const DEFAULT_AVATAR_COLOR = 'lightGrey';
+const DEFAULT_AVATAR_GRADIENT_COLOR = '#d9dcde';
 const DEFAULT_SURFACE_MODE = 'smooth';
 const DEFAULT_LIGHTING_PRESET = 'top';
 const DEFAULT_LIGHTING_COLOR = 'cool';
+const DEFAULT_LIGHTING_CUSTOM_COLOR = '#b7c9d3';
+const DEFAULT_LIGHTING_INTENSITY = 1;
+const DEFAULT_FLOW_FIELD_SPEED = 1;
+const DEFAULT_FLOW_FIELD_COUNT = 4800;
+const DEFAULT_FLOW_FIELD_GRADIENT = 'ocean';
+const DEFAULT_FLOW_FIELD_COLORS = Object.freeze([...FLOW_FIELD_GRADIENTS[DEFAULT_FLOW_FIELD_GRADIENT]]);
+const DEFAULT_FLOW_FIELD_THICKNESS = 1.5;
+const DEFAULT_FLOW_FIELD_OPACITY = 1;
+const DEFAULT_FLOW_FIELD_TRAIL_LENGTH = 1;
+const DEFAULT_FLOW_FIELD_TRAIL_FADE = 0.8;
+const DEFAULT_FLOW_FIELD_STROKE_LENGTH = 1;
+const DEFAULT_FLOW_FIELD_CURVATURE = 1;
+const DEFAULT_FLOW_FIELD_COLOR_VARIATION = 1;
+const DEFAULT_FLOW_FIELD_INFLUENCE = 1;
+const DEFAULT_FLOW_FIELD_BODY_FLOW = 1;
+const DEFAULT_FLOW_FIELD_RECOVERY = 1;
+const DEFAULT_FLOW_FIELD_PROXIMITY_FADE = 1;
+const DEFAULT_FLOW_FIELD_CONCENTRATION = 1;
+const FLOW_FIELD_SLIDER_CONFIG = Object.freeze({
+  thickness: {
+    stateKey: 'flowFieldThickness',
+    optionKey: 'thickness',
+    format: (value) => `${Number(value.toFixed(2))} PX`
+  },
+  opacity: {
+    stateKey: 'flowFieldOpacity',
+    optionKey: 'opacity',
+    format: (value) => `${Math.round(value * 100)}%`
+  },
+  trailLength: {
+    stateKey: 'flowFieldTrailLength',
+    optionKey: 'trailLength',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  trailFade: {
+    stateKey: 'flowFieldTrailFade',
+    optionKey: 'trailFade',
+    format: (value) => `${Math.round(value * 100)}%`
+  },
+  strokeLength: {
+    stateKey: 'flowFieldStrokeLength',
+    optionKey: 'strokeLength',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  curvature: {
+    stateKey: 'flowFieldCurvature',
+    optionKey: 'curvature',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  speed: {
+    stateKey: 'flowFieldSpeed',
+    optionKey: 'speed',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  count: {
+    stateKey: 'flowFieldCount',
+    optionKey: 'count',
+    format: (value) => Math.round(value).toLocaleString()
+  },
+  colorVariation: {
+    stateKey: 'flowFieldColorVariation',
+    optionKey: 'colorVariation',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  influence: {
+    stateKey: 'flowFieldInfluence',
+    optionKey: 'influence',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  bodyFlow: {
+    stateKey: 'flowFieldBodyFlow',
+    optionKey: 'bodyFlow',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  recovery: {
+    stateKey: 'flowFieldRecovery',
+    optionKey: 'recovery',
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  proximityFade: {
+    stateKey: 'flowFieldProximityFade',
+    optionKey: 'proximityFade',
+    format: (value) => value <= 0.001 ? 'OFF' : `${value.toFixed(2)}×`
+  },
+  concentration: {
+    stateKey: 'flowFieldConcentration',
+    optionKey: 'concentration',
+    format: (value) => value <= 0.001 ? 'UNIFORM' : `${value.toFixed(2)}×`
+  }
+});
 const TRACE_DURATION_SECONDS = {
   permanent: Infinity,
   long: 15,
@@ -347,6 +445,8 @@ const ui = {
   resetAll: document.querySelector('#reset-all'),
   hideControlButtons: document.querySelector('#hide-control-buttons'),
   hideAllUi: document.querySelector('#hide-all-ui'),
+  effectMenuSlot: document.querySelector('#effect-menu-slot'),
+  effectMenuStack: document.querySelector('.effect-menu-stack'),
   select: document.querySelector('#dance-select'),
   sceneWrap: document.querySelector('#scene-wrap'),
   threeCanvas: document.querySelector('#three-canvas'),
@@ -368,9 +468,14 @@ const ui = {
   avatarStyleStatus: document.querySelector('#avatar-style-status'),
   avatarStylePanel: document.querySelector('#avatar-style-panel'),
   avatarColorButtons: [...document.querySelectorAll('[data-avatar-color]')],
+  avatarSolidColorInput: document.querySelector('#avatar-solid-color'),
+  avatarGradientInputs: [...document.querySelectorAll('[data-avatar-gradient-stop]')],
   avatarSurfaceButtons: [...document.querySelectorAll('[data-avatar-surface]')],
   lightingPresetButtons: [...document.querySelectorAll('[data-lighting-preset]')],
   lightingColorButtons: [...document.querySelectorAll('[data-lighting-color]')],
+  lightingCustomColorInput: document.querySelector('#lighting-custom-color'),
+  lightingIntensityInput: document.querySelector('#lighting-intensity'),
+  lightingIntensityValue: document.querySelector('#lighting-intensity-value'),
   cameraOrbitToggle: document.querySelector('#camera-orbit-toggle'),
   cameraOrbitStatus: document.querySelector('#camera-orbit-status'),
   cameraSpeedButtons: [...document.querySelectorAll('[data-camera-speed]')],
@@ -383,6 +488,22 @@ const ui = {
   visualizationMenuPanel: document.querySelector('#visualization-menu-panel'),
   experimentButtons: [...document.querySelectorAll('[data-experiment]')],
   experimentDescription: document.querySelector('#experiment-description'),
+  flowFieldMenuToggle: document.querySelector('#flow-field-menu-toggle'),
+  flowFieldMenuClose: document.querySelector('#flow-field-menu-close'),
+  flowFieldMenuStatus: document.querySelector('#flow-field-menu-status'),
+  flowFieldMenuPanel: document.querySelector('#flow-field-menu-panel'),
+  flowFieldDisplayToggle: document.querySelector('#flow-field-display-toggle'),
+  flowFieldDisplayStatus: document.querySelector('#flow-field-display-status'),
+  flowFieldResetButton: document.querySelector('#flow-field-reset'),
+  flowFieldColorInputs: [...document.querySelectorAll('[data-flow-color-stop]')],
+  flowFieldEnabledButtons: [...document.querySelectorAll('[data-flow-enabled]')],
+  flowFieldSliders: [...document.querySelectorAll('[data-flow-field-slider]')],
+  flowFieldValues: new Map(
+    [...document.querySelectorAll('[data-flow-value]')]
+      .map((output) => [output.dataset.flowValue, output])
+  ),
+  flowFieldGradientButtons: [...document.querySelectorAll('[data-flow-gradient]')],
+  flowFieldDescription: document.querySelector('#flow-field-description'),
   traceModeButtons: [...document.querySelectorAll('[data-trace-mode]')],
   traceWidthButtons: [...document.querySelectorAll('[data-trace-width]')],
   traceVisibilityButtons: [...document.querySelectorAll('[data-trace-visible]')],
@@ -411,6 +532,8 @@ const ui = {
   analysisResizer: document.querySelector('#analysis-resizer')
 };
 
+if (ui.effectMenuSlot && ui.effectMenuStack) ui.effectMenuSlot.append(ui.effectMenuStack);
+
 const state = {
   movementIndex: MODEL_COUNT - 1,
   loadToken: 0,
@@ -425,14 +548,20 @@ const state = {
   speed: DEFAULT_SPEED,
   avatarStyleOpen: false,
   avatarColor: DEFAULT_AVATAR_COLOR,
+  avatarGradientTop: DEFAULT_AVATAR_GRADIENT_COLOR,
+  avatarGradientMiddle: DEFAULT_AVATAR_GRADIENT_COLOR,
+  avatarGradientBottom: DEFAULT_AVATAR_GRADIENT_COLOR,
   surfaceMode: DEFAULT_SURFACE_MODE,
   lightingPreset: DEFAULT_LIGHTING_PRESET,
   lightingColor: DEFAULT_LIGHTING_COLOR,
+  lightingCustomColor: DEFAULT_LIGHTING_CUSTOM_COLOR,
+  lightingIntensity: DEFAULT_LIGHTING_INTENSITY,
   skeletonGroup: null,
   skeletonBones: [],
   skeletonConnections: [],
   skeletonLine: null,
   skeletonLinePositions: null,
+  skeletonLineColors: null,
   skeletonJoints: null,
   pointCloudGroup: null,
   pointCloudEntries: [],
@@ -443,6 +572,26 @@ const state = {
   avatarOffsetY: 0,
   activeExperiments: new Set(),
   visualizationMenuOpen: false,
+  flowFieldEnabled: false,
+  flowFieldMenuOpen: false,
+  flowFieldSpeed: DEFAULT_FLOW_FIELD_SPEED,
+  flowFieldCount: DEFAULT_FLOW_FIELD_COUNT,
+  flowFieldGradient: DEFAULT_FLOW_FIELD_GRADIENT,
+  flowFieldColorStart: DEFAULT_FLOW_FIELD_COLORS[0],
+  flowFieldColorMiddle: DEFAULT_FLOW_FIELD_COLORS[1],
+  flowFieldColorEnd: DEFAULT_FLOW_FIELD_COLORS[2],
+  flowFieldThickness: DEFAULT_FLOW_FIELD_THICKNESS,
+  flowFieldOpacity: DEFAULT_FLOW_FIELD_OPACITY,
+  flowFieldTrailLength: DEFAULT_FLOW_FIELD_TRAIL_LENGTH,
+  flowFieldTrailFade: DEFAULT_FLOW_FIELD_TRAIL_FADE,
+  flowFieldStrokeLength: DEFAULT_FLOW_FIELD_STROKE_LENGTH,
+  flowFieldCurvature: DEFAULT_FLOW_FIELD_CURVATURE,
+  flowFieldColorVariation: DEFAULT_FLOW_FIELD_COLOR_VARIATION,
+  flowFieldInfluence: DEFAULT_FLOW_FIELD_INFLUENCE,
+  flowFieldBodyFlow: DEFAULT_FLOW_FIELD_BODY_FLOW,
+  flowFieldRecovery: DEFAULT_FLOW_FIELD_RECOVERY,
+  flowFieldProximityFade: DEFAULT_FLOW_FIELD_PROXIMITY_FADE,
+  flowFieldConcentration: DEFAULT_FLOW_FIELD_CONCENTRATION,
   experimentVisuals: null,
   experimentFocusId: null,
   experimentFocusElapsed: 0,
@@ -546,6 +695,27 @@ scene.add(analysisObjects);
 const experimentalObjects = new THREE.Group();
 scene.add(experimentalObjects);
 
+const flowFieldVisual = createFlowField({ maxParticles: EMBEDDED_VIEW ? 1600 : 7200 });
+setFlowFieldOptions(flowFieldVisual, {
+  enabled: false,
+  speed: DEFAULT_FLOW_FIELD_SPEED,
+  count: DEFAULT_FLOW_FIELD_COUNT,
+  gradient: DEFAULT_FLOW_FIELD_GRADIENT,
+  thickness: DEFAULT_FLOW_FIELD_THICKNESS,
+  opacity: DEFAULT_FLOW_FIELD_OPACITY,
+  trailLength: DEFAULT_FLOW_FIELD_TRAIL_LENGTH,
+  trailFade: DEFAULT_FLOW_FIELD_TRAIL_FADE,
+  strokeLength: DEFAULT_FLOW_FIELD_STROKE_LENGTH,
+  curvature: DEFAULT_FLOW_FIELD_CURVATURE,
+  colorVariation: DEFAULT_FLOW_FIELD_COLOR_VARIATION,
+  influence: DEFAULT_FLOW_FIELD_INFLUENCE,
+  bodyFlow: DEFAULT_FLOW_FIELD_BODY_FLOW,
+  recovery: DEFAULT_FLOW_FIELD_RECOVERY,
+  proximityFade: DEFAULT_FLOW_FIELD_PROXIMITY_FADE,
+  concentration: DEFAULT_FLOW_FIELD_CONCENTRATION
+});
+scene.add(flowFieldVisual.group);
+
 const dracoLoader = new DRACOLoader();
 dracoLoader.setDecoderPath('/draco/');
 dracoLoader.setDecoderConfig({ type: 'wasm' });
@@ -557,9 +727,14 @@ const clock = new THREE.Clock();
 const tempVector = new THREE.Vector3();
 const tempVectorB = new THREE.Vector3();
 const tempVectorC = new THREE.Vector3();
+const flowFieldCenter = new THREE.Vector3(0, DISPLAY_HEIGHT * 0.5, 0);
+const flowFieldDirection = new THREE.Vector3(1, 0, 0);
+const flowFieldViewDirection = new THREE.Vector3(0, 0, -1);
 const tempAvatarVertex = new THREE.Vector3();
 const tempAvatarMatrix = new THREE.Matrix4();
 const tempColor = new THREE.Color();
+const tempAvatarGradientColor = new THREE.Color();
+const customLightingGroundColor = new THREE.Color();
 const ENERGY_SURFACE_RADII = new Float32Array(TRACK_DEFINITIONS.map(({ id }) => ({
   body: 0.27,
   head: 0.19,
@@ -578,6 +753,14 @@ const energySurfaceUniforms = {
   levels: { value: new Float32Array(TRACK_DEFINITIONS.length) },
   radii: { value: ENERGY_SURFACE_RADII },
   bodyHeight: { value: DISPLAY_HEIGHT }
+};
+const avatarGradientUniforms = {
+  enabled: { value: 0 },
+  top: { value: new THREE.Color(DEFAULT_AVATAR_GRADIENT_COLOR) },
+  middle: { value: new THREE.Color(DEFAULT_AVATAR_GRADIENT_COLOR) },
+  bottom: { value: new THREE.Color(DEFAULT_AVATAR_GRADIENT_COLOR) },
+  minY: { value: 0 },
+  maxY: { value: DISPLAY_HEIGHT }
 };
 
 function populateMovementSelector() {
@@ -651,6 +834,7 @@ function disposeObject(object) {
 
 function clearCurrentModel() {
   state.ready = false;
+  flowFieldVisual.group.visible = false;
   energySurfaceUniforms.enabled.value = 0;
   energySurfaceUniforms.levels.value.fill(0);
   clearAvatarRepresentations();
@@ -757,6 +941,12 @@ function installEnergySurfaceShader(material) {
     shader.uniforms.uEnergyLevels = energySurfaceUniforms.levels;
     shader.uniforms.uEnergyRadii = energySurfaceUniforms.radii;
     shader.uniforms.uEnergyBodyHeight = energySurfaceUniforms.bodyHeight;
+    shader.uniforms.uAvatarGradientEnabled = avatarGradientUniforms.enabled;
+    shader.uniforms.uAvatarGradientTop = avatarGradientUniforms.top;
+    shader.uniforms.uAvatarGradientMiddle = avatarGradientUniforms.middle;
+    shader.uniforms.uAvatarGradientBottom = avatarGradientUniforms.bottom;
+    shader.uniforms.uAvatarGradientMinY = avatarGradientUniforms.minY;
+    shader.uniforms.uAvatarGradientMaxY = avatarGradientUniforms.maxY;
     shader.vertexShader = `varying vec3 vEnergyWorldPosition;\n${shader.vertexShader}`
       .replace(
         '#include <project_vertex>',
@@ -768,7 +958,21 @@ function installEnergySurfaceShader(material) {
       uniform float uEnergyLevels[${TRACK_DEFINITIONS.length}];
       uniform float uEnergyRadii[${TRACK_DEFINITIONS.length}];
       uniform float uEnergyBodyHeight;
+      uniform float uAvatarGradientEnabled;
+      uniform vec3 uAvatarGradientTop;
+      uniform vec3 uAvatarGradientMiddle;
+      uniform vec3 uAvatarGradientBottom;
+      uniform float uAvatarGradientMinY;
+      uniform float uAvatarGradientMaxY;
       varying vec3 vEnergyWorldPosition;
+
+      vec3 cyberSubinAvatarGradient(float heightAmount) {
+        float resolvedHeight = clamp(heightAmount, 0.0, 1.0);
+        if (resolvedHeight < 0.5) {
+          return mix(uAvatarGradientBottom, uAvatarGradientMiddle, resolvedHeight * 2.0);
+        }
+        return mix(uAvatarGradientMiddle, uAvatarGradientTop, (resolvedHeight - 0.5) * 2.0);
+      }
 
       vec3 cyberSubinEnergyRamp(float heat) {
         vec3 coolBlue = vec3(0.035, 0.16, 1.0);
@@ -780,6 +984,11 @@ function installEnergySurfaceShader(material) {
     ${shader.fragmentShader}`.replace(
       '#include <opaque_fragment>',
       `
+        if (uAvatarGradientEnabled > 0.5) {
+          float avatarHeight = (vEnergyWorldPosition.y - uAvatarGradientMinY)
+            / max(0.001, uAvatarGradientMaxY - uAvatarGradientMinY);
+          outgoingLight *= cyberSubinAvatarGradient(avatarHeight);
+        }
         if (uEnergyEnabled > 0.5) {
           float totalWeight = 0.0;
           float weightedHeat = 0.0;
@@ -805,7 +1014,7 @@ function installEnergySurfaceShader(material) {
       `
     );
   };
-  material.customProgramCacheKey = () => 'cyber-subin-accumulated-energy-surface-v2';
+  material.customProgramCacheKey = () => 'cyber-subin-avatar-gradient-energy-surface-v3';
 }
 
 function styleModel(root) {
@@ -854,6 +1063,7 @@ function clearAvatarRepresentations() {
   state.skeletonConnections = [];
   state.skeletonLine = null;
   state.skeletonLinePositions = null;
+  state.skeletonLineColors = null;
   state.skeletonJoints = null;
   state.pointCloudGroup = null;
   state.pointCloudEntries = [];
@@ -861,6 +1071,8 @@ function clearAvatarRepresentations() {
 
 function updateAvatarPointCloud() {
   if (!state.pointCloudGroup?.visible) return;
+  const gradientEnabled = state.avatarColor === 'custom';
+  const solidColor = getAvatarRepresentationColor();
   for (const entry of state.pointCloudEntries) {
     entry.source.updateWorldMatrix(true, false);
     for (let pointIndex = 0; pointIndex < entry.vertexIndices.length; pointIndex += 1) {
@@ -870,14 +1082,23 @@ function updateAvatarPointCloud() {
       entry.positions[offset] = tempAvatarVertex.x;
       entry.positions[offset + 1] = tempAvatarVertex.y;
       entry.positions[offset + 2] = tempAvatarVertex.z;
+      const color = gradientEnabled
+        ? getAvatarGradientColor(tempAvatarVertex.y, tempColor)
+        : tempColor.set(solidColor);
+      entry.colors[offset] = color.r;
+      entry.colors[offset + 1] = color.g;
+      entry.colors[offset + 2] = color.b;
     }
     entry.points.geometry.attributes.position.needsUpdate = true;
+    entry.points.geometry.attributes.color.needsUpdate = true;
   }
 }
 
 function updateAvatarSkeleton() {
   if (!state.skeletonGroup?.visible || !state.skeletonLine || !state.skeletonJoints) return;
   state.root?.updateMatrixWorld(true);
+  const gradientEnabled = state.avatarColor === 'custom';
+  const solidColor = getAvatarRepresentationColor();
 
   for (let index = 0; index < state.skeletonConnections.length; index += 1) {
     const connection = state.skeletonConnections[index];
@@ -890,16 +1111,35 @@ function updateAvatarSkeleton() {
     state.skeletonLinePositions[offset + 3] = tempVectorB.x;
     state.skeletonLinePositions[offset + 4] = tempVectorB.y;
     state.skeletonLinePositions[offset + 5] = tempVectorB.z;
+    const startColor = gradientEnabled
+      ? getAvatarGradientColor(tempVector.y, tempColor)
+      : tempColor.set(solidColor);
+    state.skeletonLineColors[offset] = startColor.r;
+    state.skeletonLineColors[offset + 1] = startColor.g;
+    state.skeletonLineColors[offset + 2] = startColor.b;
+    const endColor = gradientEnabled
+      ? getAvatarGradientColor(tempVectorB.y, tempColor)
+      : tempColor.set(solidColor);
+    state.skeletonLineColors[offset + 3] = endColor.r;
+    state.skeletonLineColors[offset + 4] = endColor.g;
+    state.skeletonLineColors[offset + 5] = endColor.b;
   }
   const linePositionAttribute = state.skeletonLine.geometry.attributes.instanceStart;
   if (linePositionAttribute?.data) linePositionAttribute.data.needsUpdate = true;
+  const lineColorAttribute = state.skeletonLine.geometry.attributes.instanceColorStart;
+  if (lineColorAttribute?.data) lineColorAttribute.data.needsUpdate = true;
 
   for (let index = 0; index < state.skeletonBones.length; index += 1) {
     state.skeletonBones[index].getWorldPosition(tempVector);
     tempAvatarMatrix.makeTranslation(tempVector.x, tempVector.y, tempVector.z);
     state.skeletonJoints.setMatrixAt(index, tempAvatarMatrix);
+    const jointColor = gradientEnabled
+      ? getAvatarGradientColor(tempVector.y, tempColor)
+      : tempColor.set(solidColor);
+    state.skeletonJoints.setColorAt(index, jointColor);
   }
   state.skeletonJoints.instanceMatrix.needsUpdate = true;
+  if (state.skeletonJoints.instanceColor) state.skeletonJoints.instanceColor.needsUpdate = true;
 }
 
 function createAvatarRepresentations(root) {
@@ -922,12 +1162,15 @@ function createAvatarRepresentations(root) {
     const vertexIndices = [];
     for (let index = 0; index < vertexCount; index += stride) vertexIndices.push(index);
     const positions = new Float32Array(vertexIndices.length * 3);
+    const colors = new Float32Array(vertexIndices.length * 3);
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     const points = new THREE.Points(
       geometry,
       new THREE.PointsMaterial({
-        color: AVATAR_COLORS[state.avatarColor],
+        color: '#ffffff',
+        vertexColors: true,
         size: EMBEDDED_VIEW ? 0.02 : 0.018,
         sizeAttenuation: true,
         transparent: true,
@@ -938,7 +1181,7 @@ function createAvatarRepresentations(root) {
     points.frustumCulled = false;
     points.renderOrder = 6;
     pointCloudGroup.add(points);
-    return { source, vertexIndices, positions, points };
+    return { source, vertexIndices, positions, colors, points };
   });
   state.pointCloudGroup = pointCloudGroup;
   scene.add(pointCloudGroup);
@@ -951,13 +1194,16 @@ function createAvatarRepresentations(root) {
     .filter((bone) => bone.parent?.isBone)
     .map((bone) => ({ parent: bone.parent, child: bone }));
   const skeletonLinePositions = new Float32Array(skeletonConnections.length * 6);
+  const skeletonLineColors = new Float32Array(skeletonConnections.length * 6);
   const skeletonLineGeometry = new LineSegmentsGeometry();
   skeletonLineGeometry.setPositions(skeletonLinePositions);
+  skeletonLineGeometry.setColors(skeletonLineColors);
   skeletonLineGeometry.instanceCount = skeletonConnections.length;
   const skeletonLine = new LineSegments2(
     skeletonLineGeometry,
     new LineMaterial({
-      color: AVATAR_COLORS[state.avatarColor],
+      color: '#ffffff',
+      vertexColors: true,
       linewidth: EMBEDDED_VIEW ? 3.2 : 4.8,
       transparent: true,
       opacity: 1,
@@ -973,7 +1219,7 @@ function createAvatarRepresentations(root) {
   const skeletonJoints = new THREE.InstancedMesh(
     new THREE.SphereGeometry(EMBEDDED_VIEW ? 0.027 : 0.034, 14, 12),
     new THREE.MeshBasicMaterial({
-      color: AVATAR_COLORS[state.avatarColor],
+      color: '#ffffff',
       transparent: true,
       opacity: 1,
       depthTest: false,
@@ -995,12 +1241,44 @@ function createAvatarRepresentations(root) {
   state.skeletonConnections = skeletonConnections;
   state.skeletonLine = skeletonLine;
   state.skeletonLinePositions = skeletonLinePositions;
+  state.skeletonLineColors = skeletonLineColors;
   state.skeletonJoints = skeletonJoints;
   scene.add(skeletonGroup);
 }
 
+function getAvatarRepresentationColor() {
+  return state.avatarColor === 'custom'
+    ? state.avatarGradientMiddle
+    : AVATAR_COLORS[state.avatarColor] ?? AVATAR_COLORS.pearl;
+}
+
+function getAvatarGradientColor(worldY, target) {
+  const height = THREE.MathUtils.clamp(
+    (worldY - state.avatarOffsetY) / DISPLAY_HEIGHT,
+    0,
+    1
+  );
+  if (height < 0.5) {
+    return target
+      .set(state.avatarGradientBottom)
+      .lerp(tempAvatarGradientColor.set(state.avatarGradientMiddle), height * 2);
+  }
+  return target
+    .set(state.avatarGradientMiddle)
+    .lerp(tempAvatarGradientColor.set(state.avatarGradientTop), (height - 0.5) * 2);
+}
+
 function applyAvatarAppearance() {
-  const avatarColor = AVATAR_COLORS[state.avatarColor] ?? AVATAR_COLORS.pearl;
+  const gradientEnabled = state.avatarColor === 'custom';
+  const avatarColor = gradientEnabled
+    ? '#ffffff'
+    : AVATAR_COLORS[state.avatarColor] ?? AVATAR_COLORS.pearl;
+  avatarGradientUniforms.enabled.value = gradientEnabled ? 1 : 0;
+  avatarGradientUniforms.top.value.set(state.avatarGradientTop);
+  avatarGradientUniforms.middle.value.set(state.avatarGradientMiddle);
+  avatarGradientUniforms.bottom.value.set(state.avatarGradientBottom);
+  avatarGradientUniforms.minY.value = state.avatarOffsetY;
+  avatarGradientUniforms.maxY.value = state.avatarOffsetY + DISPLAY_HEIGHT;
   const showMesh = ['smooth', 'rough'].includes(state.surfaceMode);
   state.root?.traverse((child) => {
     if (!child.isMesh) return;
@@ -1020,11 +1298,11 @@ function applyAvatarAppearance() {
   });
 
   if (state.pointCloudGroup) state.pointCloudGroup.visible = state.surfaceMode === 'points';
-  for (const entry of state.pointCloudEntries) entry.points.material.color.set(avatarColor);
+  for (const entry of state.pointCloudEntries) entry.points.material.color.set('#ffffff');
   if (state.skeletonGroup) {
     state.skeletonGroup.visible = state.surfaceMode === 'skeleton';
-    state.skeletonLine?.material.color.set(avatarColor);
-    state.skeletonJoints?.material.color.set(avatarColor);
+    state.skeletonLine?.material.color.set('#ffffff');
+    state.skeletonJoints?.material.color.set('#ffffff');
   }
   if (state.surfaceMode === 'points') updateAvatarPointCloud();
   if (state.surfaceMode === 'skeleton') updateAvatarSkeleton();
@@ -1035,6 +1313,7 @@ function closePeerControlMenus(except) {
   if (except !== 'camera' && state.cameraControlsOpen) setCameraControlsOpen(false);
   if (except !== 'line' && state.lineControlsOpen) setLineControlsOpen(false);
   if (except !== 'visualization' && state.visualizationMenuOpen) setVisualizationMenu(false);
+  if (except !== 'flowField' && state.flowFieldMenuOpen) setFlowFieldMenu(false);
 }
 
 function setAvatarStyleOpen(open) {
@@ -1048,7 +1327,40 @@ function setAvatarStyleOpen(open) {
 function setAvatarColor(color, activeButton) {
   if (!(color in AVATAR_COLORS)) return;
   state.avatarColor = color;
+  const resolvedColor = AVATAR_COLORS[color];
+  state.avatarGradientTop = resolvedColor;
+  state.avatarGradientMiddle = resolvedColor;
+  state.avatarGradientBottom = resolvedColor;
+  ui.avatarGradientInputs.forEach((input) => {
+    input.value = resolvedColor;
+  });
+  ui.avatarSolidColorInput.value = resolvedColor;
   ui.avatarColorButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
+  applyAvatarAppearance();
+}
+
+function setAvatarSolidColor(color) {
+  const resolvedColor = normalizeHexColor(color, state.avatarGradientMiddle);
+  ui.avatarSolidColorInput.value = resolvedColor;
+  setAvatarGradientColors([resolvedColor, resolvedColor, resolvedColor]);
+}
+
+function setAvatarGradientColors(colors) {
+  const fallbacks = [
+    state.avatarGradientTop,
+    state.avatarGradientMiddle,
+    state.avatarGradientBottom
+  ];
+  const resolvedColors = fallbacks.map((fallback, index) => (
+    normalizeHexColor(colors?.[index], fallback)
+  ));
+  [state.avatarGradientTop, state.avatarGradientMiddle, state.avatarGradientBottom] = resolvedColors;
+  state.avatarColor = 'custom';
+  ui.avatarGradientInputs.forEach((input, index) => {
+    input.value = resolvedColors[index];
+  });
+  ui.avatarSolidColorInput.value = resolvedColors[1];
+  ui.avatarColorButtons.forEach((button) => button.classList.remove('active'));
   applyAvatarAppearance();
 }
 
@@ -1062,19 +1374,25 @@ function setAvatarSurface(surface, activeButton) {
 function applyLightingSetup() {
   const preset = LIGHTING_PRESETS[state.lightingPreset];
   if (!preset) return;
-  const color = LIGHTING_COLOR_PRESETS[state.lightingColor];
+  const color = state.lightingColor === 'custom'
+    ? {
+        light: state.lightingCustomColor,
+        ground: customLightingGroundColor.set(state.lightingCustomColor).multiplyScalar(0.035)
+      }
+    : LIGHTING_COLOR_PRESETS[state.lightingColor];
   const lightColor = color?.light;
+  const intensity = state.lightingIntensity;
   ambient.color.set(lightColor ?? preset.hemisphere[0]);
   ambient.groundColor.set(color?.ground ?? preset.hemisphere[1]);
-  ambient.intensity = preset.hemisphere[2];
+  ambient.intensity = preset.hemisphere[2] * intensity;
   keyLight.color.set(lightColor ?? preset.key[0]);
-  keyLight.intensity = preset.key[1];
+  keyLight.intensity = preset.key[1] * intensity;
   keyLight.position.fromArray(preset.key[2]);
   rimLight.color.set(lightColor ?? preset.rim[0]);
-  rimLight.intensity = preset.rim[1];
+  rimLight.intensity = preset.rim[1] * intensity;
   rimLight.position.fromArray(preset.rim[2]);
   fillLight.color.set(lightColor ?? preset.fill[0]);
-  fillLight.intensity = preset.fill[1];
+  fillLight.intensity = preset.fill[1] * intensity;
   fillLight.position.fromArray(preset.fill[2]);
   renderer.toneMappingExposure = preset.exposure;
 }
@@ -1089,8 +1407,31 @@ function setLightingPreset(name, activeButton) {
 function setLightingColor(name, activeButton) {
   if (!(name in LIGHTING_COLOR_PRESETS)) return;
   state.lightingColor = name;
+  const selectedColor = LIGHTING_COLOR_PRESETS[name]?.light ?? LIGHTING_PRESETS[state.lightingPreset]?.key[0];
+  if (selectedColor) ui.lightingCustomColorInput.value = selectedColor;
   applyLightingSetup();
   ui.lightingColorButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
+}
+
+function setCustomLightingColor(color) {
+  const resolvedColor = normalizeHexColor(color, state.lightingCustomColor);
+  state.lightingColor = 'custom';
+  state.lightingCustomColor = resolvedColor;
+  ui.lightingCustomColorInput.value = resolvedColor;
+  ui.lightingColorButtons.forEach((button) => button.classList.remove('active'));
+  applyLightingSetup();
+}
+
+function setLightingIntensity(value) {
+  const minimum = Number(ui.lightingIntensityInput.min);
+  const maximum = Number(ui.lightingIntensityInput.max);
+  const intensity = THREE.MathUtils.clamp(Number(value) || 0, minimum, maximum);
+  const progress = ((intensity - minimum) / Math.max(0.001, maximum - minimum)) * 100;
+  state.lightingIntensity = Number(intensity.toFixed(2));
+  ui.lightingIntensityInput.value = String(state.lightingIntensity);
+  ui.lightingIntensityInput.style.setProperty('--flow-slider-progress', `${progress}%`);
+  ui.lightingIntensityValue.textContent = `${Math.round(state.lightingIntensity * 100)}%`;
+  applyLightingSetup();
 }
 
 function normalizeModel(root) {
@@ -1290,9 +1631,14 @@ function getCurrentViewState(
   return {
     experiments: [...experiments],
     avatarColor: state.avatarColor,
+    avatarGradientTop: state.avatarGradientTop,
+    avatarGradientMiddle: state.avatarGradientMiddle,
+    avatarGradientBottom: state.avatarGradientBottom,
     surfaceMode: state.surfaceMode,
     lightingPreset: state.lightingPreset,
     lightingColor: state.lightingColor,
+    lightingCustomColor: state.lightingCustomColor,
+    lightingIntensity: state.lightingIntensity,
     traceVisible: state.traceVisible,
     bodyPointsVisible: state.bodyPointsVisible,
     traceMode: state.traceMode,
@@ -1315,6 +1661,26 @@ function getCurrentViewState(
     cameraControlsOpen: state.cameraControlsOpen,
     lineControlsOpen: state.lineControlsOpen,
     visualizationMenuOpen: state.visualizationMenuOpen,
+    flowFieldEnabled: state.flowFieldEnabled,
+    flowFieldMenuOpen: state.flowFieldMenuOpen,
+    flowFieldSpeed: state.flowFieldSpeed,
+    flowFieldCount: state.flowFieldCount,
+    flowFieldGradient: state.flowFieldGradient,
+    flowFieldColorStart: state.flowFieldColorStart,
+    flowFieldColorMiddle: state.flowFieldColorMiddle,
+    flowFieldColorEnd: state.flowFieldColorEnd,
+    flowFieldThickness: state.flowFieldThickness,
+    flowFieldOpacity: state.flowFieldOpacity,
+    flowFieldTrailLength: state.flowFieldTrailLength,
+    flowFieldTrailFade: state.flowFieldTrailFade,
+    flowFieldStrokeLength: state.flowFieldStrokeLength,
+    flowFieldCurvature: state.flowFieldCurvature,
+    flowFieldColorVariation: state.flowFieldColorVariation,
+    flowFieldInfluence: state.flowFieldInfluence,
+    flowFieldBodyFlow: state.flowFieldBodyFlow,
+    flowFieldRecovery: state.flowFieldRecovery,
+    flowFieldProximityFade: state.flowFieldProximityFade,
+    flowFieldConcentration: state.flowFieldConcentration,
     controlsHidden: document.body.classList.contains('controls-hidden'),
     interfaceHidden: document.body.classList.contains('interface-hidden')
   };
@@ -1345,7 +1711,13 @@ function syncShareableUrl() {
 function applyViewState(view) {
   if (!view || typeof view !== 'object') return;
   if (Array.isArray(view.experiments)) setExperimentModes(view.experiments);
-  if (view.avatarColor) {
+  if (view.avatarColor === 'custom') {
+    setAvatarGradientColors([
+      view.avatarGradientTop,
+      view.avatarGradientMiddle,
+      view.avatarGradientBottom
+    ]);
+  } else if (view.avatarColor) {
     setAvatarColor(view.avatarColor, ui.avatarColorButtons.find((button) => button.dataset.avatarColor === view.avatarColor));
   }
   if (view.surfaceMode) {
@@ -1354,9 +1726,12 @@ function applyViewState(view) {
   if (view.lightingPreset) {
     setLightingPreset(view.lightingPreset, ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === view.lightingPreset));
   }
-  if (view.lightingColor) {
+  if (view.lightingColor === 'custom') {
+    setCustomLightingColor(view.lightingCustomColor);
+  } else if (view.lightingColor) {
     setLightingColor(view.lightingColor, ui.lightingColorButtons.find((button) => button.dataset.lightingColor === view.lightingColor));
   }
+  if (Number.isFinite(Number(view.lightingIntensity))) setLightingIntensity(view.lightingIntensity);
   if (typeof view.traceVisible === 'boolean') setTraceVisibility(view.traceVisible);
   if (typeof view.bodyPointsVisible === 'boolean') setBodyPointsVisibility(view.bodyPointsVisible);
   if (view.traceMode) setTraceMode(view.traceMode, ui.traceModeButtons.find((button) => button.dataset.traceMode === view.traceMode));
@@ -1413,6 +1788,36 @@ function applyViewState(view) {
   if (typeof view.cameraControlsOpen === 'boolean') setCameraControlsOpen(view.cameraControlsOpen);
   if (typeof view.lineControlsOpen === 'boolean') setLineControlsOpen(view.lineControlsOpen);
   if (typeof view.visualizationMenuOpen === 'boolean') setVisualizationMenu(view.visualizationMenuOpen);
+  const flowFieldViewControls = {
+    thickness: view.flowFieldThickness,
+    opacity: view.flowFieldOpacity,
+    trailLength: view.flowFieldTrailLength,
+    trailFade: view.flowFieldTrailFade,
+    strokeLength: view.flowFieldStrokeLength,
+    curvature: view.flowFieldCurvature,
+    speed: view.flowFieldSpeed,
+    count: view.flowFieldCount,
+    colorVariation: view.flowFieldColorVariation,
+    influence: view.flowFieldInfluence,
+    bodyFlow: view.flowFieldBodyFlow,
+    recovery: view.flowFieldRecovery,
+    proximityFade: view.flowFieldProximityFade,
+    concentration: view.flowFieldConcentration
+  };
+  for (const [control, value] of Object.entries(flowFieldViewControls)) {
+    if (Number.isFinite(Number(value))) setFlowFieldSlider(control, Number(value));
+  }
+  if (view.flowFieldGradient === 'custom') {
+    setFlowFieldColors([
+      view.flowFieldColorStart,
+      view.flowFieldColorMiddle,
+      view.flowFieldColorEnd
+    ]);
+  } else if (view.flowFieldGradient) {
+    setFlowFieldGradient(view.flowFieldGradient, ui.flowFieldGradientButtons.find((button) => button.dataset.flowGradient === view.flowFieldGradient));
+  }
+  if (typeof view.flowFieldEnabled === 'boolean') setFlowFieldEnabled(view.flowFieldEnabled);
+  if (typeof view.flowFieldMenuOpen === 'boolean') setFlowFieldMenu(view.flowFieldMenuOpen);
   if (typeof view.controlsHidden === 'boolean') setControlButtonsHidden(view.controlsHidden);
   if (typeof view.interfaceHidden === 'boolean') setInterfaceHidden(view.interfaceHidden);
 }
@@ -2119,8 +2524,36 @@ function updateRelationVisuals(delta) {
 }
 
 function updateExperimentalVisuals(delta) {
-  if (!state.experimentVisuals) return;
   state.experimentTime += delta;
+  if (state.flowFieldEnabled && !EMBEDDED_VIEW) {
+    let minimumY = Infinity;
+    let maximumY = -Infinity;
+    let centerZ = 0;
+    for (const tracker of state.trackers) {
+      minimumY = Math.min(minimumY, tracker.anchorPosition.y);
+      maximumY = Math.max(maximumY, tracker.anchorPosition.y);
+      centerZ += tracker.anchorPosition.z;
+    }
+    flowFieldCenter.set(
+      state.avatarOffsetX,
+      Number.isFinite(minimumY) && Number.isFinite(maximumY)
+        ? (minimumY + maximumY) * 0.5
+        : DISPLAY_HEIGHT * 0.5 + state.avatarOffsetY,
+      state.trackers.length ? centerZ / state.trackers.length : 0
+    );
+    camera.updateMatrixWorld();
+    flowFieldDirection.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    camera.getWorldDirection(flowFieldViewDirection);
+    updateFlowField(flowFieldVisual, {
+      delta,
+      time: state.experimentTime,
+      trackers: state.trackers,
+      center: flowFieldCenter,
+      flowDirection: flowFieldDirection,
+      viewDirection: flowFieldViewDirection
+    });
+  }
+  if (!state.experimentVisuals) return;
   if (state.activeExperiments.has('energy')) updateEnergyVisuals(delta);
   if (state.activeExperiments.has('curves')) updateCurveVisuals();
   if (state.activeExperiments.has('axes')) updateAxisVisuals();
@@ -2437,6 +2870,9 @@ function prepareModel(gltf, movement) {
   createTrackers();
   resetTrackerSamples();
   createExperimentalVisuals();
+  flowFieldCenter.set(state.avatarOffsetX, DISPLAY_HEIGHT * 0.5 + state.avatarOffsetY, 0);
+  resetFlowField(flowFieldVisual, flowFieldCenter);
+  setFlowFieldOptions(flowFieldVisual, { enabled: state.flowFieldEnabled && !EMBEDDED_VIEW });
   fitCamera();
 
   ui.timeline.min = String(clipStart);
@@ -2584,6 +3020,8 @@ function setAvatarPosition(nextX, nextY) {
   const deltaY = clampedY - state.avatarOffsetY;
   state.avatarOffsetX = clampedX;
   state.avatarOffsetY = clampedY;
+  avatarGradientUniforms.minY.value = clampedY;
+  avatarGradientUniforms.maxY.value = clampedY + DISPLAY_HEIGHT;
 
   if (state.modelContainer) {
     state.modelContainer.position.set(clampedX, clampedY, 0);
@@ -2727,6 +3165,115 @@ function setVisualizationMenu(open) {
   ui.visualizationMenuPanel.hidden = !open;
 }
 
+function updateFlowFieldDescription() {
+  if (!state.flowFieldEnabled) {
+    ui.flowFieldDescription.textContent = 'OFF · ENABLE PARTICLES TO REVEAL MOVEMENT-GENERATED CURRENTS + DECAYING TURBULENT STREAMS';
+    return;
+  }
+  const gradient = state.flowFieldGradient.toUpperCase();
+  const proximity = state.flowFieldProximityFade <= 0.001
+    ? 'EVEN VISIBILITY'
+    : `${state.flowFieldProximityFade.toFixed(2)}× PROXIMITY FADE`;
+  const concentration = state.flowFieldConcentration <= 0.001
+    ? 'UNIFORM FIELD'
+    : `${state.flowFieldConcentration.toFixed(2)}× AVATAR CONCENTRATION`;
+  const opacity = `${Math.round(state.flowFieldOpacity * 100)}% OPACITY`;
+  ui.flowFieldDescription.textContent = `${state.flowFieldCount.toLocaleString()} STROKES · ${state.flowFieldSpeed.toFixed(2)}× FLOW · ${state.flowFieldCurvature.toFixed(2)}× CURVE INERTIA · ${state.flowFieldBodyFlow.toFixed(2)}× AVATAR WRAP · ${state.flowFieldInfluence.toFixed(2)}× WAKE · ${opacity} · ${concentration} · ${proximity} · ${gradient}`;
+}
+
+function setFlowFieldMenu(open) {
+  if (open) closePeerControlMenus('flowField');
+  state.flowFieldMenuOpen = open;
+  ui.flowFieldMenuToggle.setAttribute('aria-expanded', String(open));
+  ui.flowFieldMenuStatus.textContent = open ? 'OPEN' : state.flowFieldEnabled ? 'ON' : 'SHOW';
+  ui.flowFieldMenuPanel.hidden = !open;
+}
+
+function setFlowFieldEnabled(enabled) {
+  state.flowFieldEnabled = Boolean(enabled);
+  ui.flowFieldDisplayToggle.setAttribute('aria-pressed', String(state.flowFieldEnabled));
+  ui.flowFieldDisplayToggle.setAttribute(
+    'aria-label',
+    state.flowFieldEnabled ? 'Hide flow field' : 'Show flow field'
+  );
+  ui.flowFieldDisplayStatus.textContent = state.flowFieldEnabled ? 'ON' : 'OFF';
+  ui.flowFieldEnabledButtons.forEach((button) => {
+    button.classList.toggle('active', button.dataset.flowEnabled === String(state.flowFieldEnabled));
+  });
+  setFlowFieldOptions(flowFieldVisual, {
+    enabled: state.flowFieldEnabled && state.ready && !EMBEDDED_VIEW
+  });
+  if (state.flowFieldEnabled && !flowFieldVisual.initialized) {
+    flowFieldCenter.set(state.avatarOffsetX, DISPLAY_HEIGHT * 0.5 + state.avatarOffsetY, 0);
+    resetFlowField(flowFieldVisual, flowFieldCenter);
+  }
+  if (!state.flowFieldMenuOpen) ui.flowFieldMenuStatus.textContent = state.flowFieldEnabled ? 'ON' : 'SHOW';
+  updateFlowFieldDescription();
+}
+
+function resetFlowFieldParticles() {
+  flowFieldCenter.set(state.avatarOffsetX, DISPLAY_HEIGHT * 0.5 + state.avatarOffsetY, 0);
+  resetFlowField(flowFieldVisual, flowFieldCenter);
+}
+
+function setFlowFieldSlider(control, value) {
+  const config = FLOW_FIELD_SLIDER_CONFIG[control];
+  const input = ui.flowFieldSliders.find((candidate) => candidate.dataset.flowFieldSlider === control);
+  const numericValue = Number(value);
+  if (!config || !input || !Number.isFinite(numericValue)) return;
+  const minimum = Number(input.min);
+  const maximum = Number(input.max);
+  const resolvedValue = control === 'count'
+    ? Math.round(THREE.MathUtils.clamp(numericValue, minimum, maximum) / 100) * 100
+    : Number(THREE.MathUtils.clamp(numericValue, minimum, maximum).toFixed(3));
+  const progress = ((resolvedValue - minimum) / Math.max(0.0001, maximum - minimum)) * 100;
+
+  state[config.stateKey] = resolvedValue;
+  input.value = String(resolvedValue);
+  input.style.setProperty('--flow-slider-progress', `${progress}%`);
+  const output = ui.flowFieldValues.get(control);
+  if (output) output.textContent = config.format(resolvedValue);
+  setFlowFieldOptions(flowFieldVisual, { [config.optionKey]: resolvedValue });
+  updateFlowFieldDescription();
+}
+
+function normalizeHexColor(value, fallback) {
+  const candidate = String(value ?? '').trim();
+  return /^#[0-9a-f]{6}$/i.test(candidate) ? candidate.toLowerCase() : fallback;
+}
+
+function setFlowFieldColors(colors) {
+  const fallbacks = [
+    state.flowFieldColorStart,
+    state.flowFieldColorMiddle,
+    state.flowFieldColorEnd
+  ];
+  const resolvedColors = fallbacks.map((fallback, index) => (
+    normalizeHexColor(colors?.[index], fallback)
+  ));
+  [state.flowFieldColorStart, state.flowFieldColorMiddle, state.flowFieldColorEnd] = resolvedColors;
+  state.flowFieldGradient = 'custom';
+  ui.flowFieldColorInputs.forEach((input, index) => {
+    input.value = resolvedColors[index];
+  });
+  ui.flowFieldGradientButtons.forEach((button) => button.classList.remove('active'));
+  setFlowFieldOptions(flowFieldVisual, { colors: resolvedColors });
+  updateFlowFieldDescription();
+}
+
+function setFlowFieldGradient(gradient, activeButton) {
+  if (!(gradient in FLOW_FIELD_GRADIENTS)) return;
+  state.flowFieldGradient = gradient;
+  const colors = FLOW_FIELD_GRADIENTS[gradient];
+  [state.flowFieldColorStart, state.flowFieldColorMiddle, state.flowFieldColorEnd] = colors;
+  ui.flowFieldColorInputs.forEach((input, index) => {
+    input.value = colors[index];
+  });
+  ui.flowFieldGradientButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
+  setFlowFieldOptions(flowFieldVisual, { gradient });
+  updateFlowFieldDescription();
+}
+
 function getMaximumAnalysisWidth() {
   return Math.max(300, Math.min(760, window.innerWidth - 420));
 }
@@ -2788,6 +3335,8 @@ function resetExperience() {
     centerCharacter();
     resetTrackerSamples();
   }
+  flowFieldCenter.set(state.avatarOffsetX, DISPLAY_HEIGHT * 0.5 + state.avatarOffsetY, 0);
+  resetFlowField(flowFieldVisual, flowFieldCenter);
   setPlaying(true);
   fitCamera();
 }
@@ -3047,6 +3596,10 @@ ui.lineControlsToggle.addEventListener('click', () => setLineControlsOpen(!state
 ui.lineControlsClose.addEventListener('click', () => setLineControlsOpen(false));
 ui.visualizationMenuToggle.addEventListener('click', () => setVisualizationMenu(!state.visualizationMenuOpen));
 ui.visualizationMenuClose.addEventListener('click', () => setVisualizationMenu(false));
+ui.flowFieldMenuToggle.addEventListener('click', () => setFlowFieldMenu(!state.flowFieldMenuOpen));
+ui.flowFieldMenuClose.addEventListener('click', () => setFlowFieldMenu(false));
+ui.flowFieldDisplayToggle.addEventListener('click', () => setFlowFieldEnabled(!state.flowFieldEnabled));
+ui.flowFieldResetButton.addEventListener('click', resetFlowFieldParticles);
 
 ui.timeline.addEventListener('input', () => {
   if (!state.action || !state.mixer) return;
@@ -3066,6 +3619,17 @@ for (const button of ui.avatarColorButtons) {
   button.addEventListener('click', () => setAvatarColor(button.dataset.avatarColor, button));
 }
 
+ui.avatarSolidColorInput.addEventListener('input', () => {
+  setAvatarSolidColor(ui.avatarSolidColorInput.value);
+});
+
+for (const input of ui.avatarGradientInputs) {
+  input.addEventListener('input', () => {
+    const colors = ui.avatarGradientInputs.map((candidate) => candidate.value);
+    setAvatarGradientColors(colors);
+  });
+}
+
 for (const button of ui.avatarSurfaceButtons) {
   button.addEventListener('click', () => setAvatarSurface(button.dataset.avatarSurface, button));
 }
@@ -3077,6 +3641,14 @@ for (const button of ui.lightingPresetButtons) {
 for (const button of ui.lightingColorButtons) {
   button.addEventListener('click', () => setLightingColor(button.dataset.lightingColor, button));
 }
+
+ui.lightingCustomColorInput.addEventListener('input', () => {
+  setCustomLightingColor(ui.lightingCustomColorInput.value);
+});
+
+ui.lightingIntensityInput.addEventListener('input', () => {
+  setLightingIntensity(ui.lightingIntensityInput.value);
+});
 
 for (const button of ui.cameraSpeedButtons) {
   button.addEventListener('click', () => setCameraOrbitSpeed(Number(button.dataset.cameraSpeed), button));
@@ -3092,6 +3664,25 @@ for (const button of ui.avatarMoveButtons) {
 
 for (const button of ui.experimentButtons) {
   button.addEventListener('click', () => toggleExperiment(button.dataset.experiment));
+}
+
+for (const button of ui.flowFieldEnabledButtons) {
+  button.addEventListener('click', () => setFlowFieldEnabled(button.dataset.flowEnabled === 'true'));
+}
+
+for (const input of ui.flowFieldSliders) {
+  input.addEventListener('input', () => setFlowFieldSlider(input.dataset.flowFieldSlider, input.value));
+}
+
+for (const input of ui.flowFieldColorInputs) {
+  input.addEventListener('input', () => {
+    const colors = ui.flowFieldColorInputs.map((candidate) => candidate.value);
+    setFlowFieldColors(colors);
+  });
+}
+
+for (const button of ui.flowFieldGradientButtons) {
+  button.addEventListener('click', () => setFlowFieldGradient(button.dataset.flowGradient, button));
 }
 
 for (const button of ui.traceModeButtons) {
@@ -3258,9 +3849,27 @@ setAvatarColor(DEFAULT_AVATAR_COLOR, ui.avatarColorButtons.find((button) => butt
 setAvatarSurface(DEFAULT_SURFACE_MODE, ui.avatarSurfaceButtons.find((button) => button.dataset.avatarSurface === DEFAULT_SURFACE_MODE));
 setLightingPreset(DEFAULT_LIGHTING_PRESET, ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === DEFAULT_LIGHTING_PRESET));
 setLightingColor(DEFAULT_LIGHTING_COLOR, ui.lightingColorButtons.find((button) => button.dataset.lightingColor === DEFAULT_LIGHTING_COLOR));
+setLightingIntensity(DEFAULT_LIGHTING_INTENSITY);
 setCameraControlsOpen(false);
 setLineControlsOpen(false);
 setVisualizationMenu(false);
+setFlowFieldSlider('thickness', DEFAULT_FLOW_FIELD_THICKNESS);
+setFlowFieldSlider('opacity', DEFAULT_FLOW_FIELD_OPACITY);
+setFlowFieldSlider('trailLength', DEFAULT_FLOW_FIELD_TRAIL_LENGTH);
+setFlowFieldSlider('trailFade', DEFAULT_FLOW_FIELD_TRAIL_FADE);
+setFlowFieldSlider('strokeLength', DEFAULT_FLOW_FIELD_STROKE_LENGTH);
+setFlowFieldSlider('curvature', DEFAULT_FLOW_FIELD_CURVATURE);
+setFlowFieldSlider('speed', DEFAULT_FLOW_FIELD_SPEED);
+setFlowFieldSlider('count', DEFAULT_FLOW_FIELD_COUNT);
+setFlowFieldSlider('colorVariation', DEFAULT_FLOW_FIELD_COLOR_VARIATION);
+setFlowFieldSlider('influence', DEFAULT_FLOW_FIELD_INFLUENCE);
+setFlowFieldSlider('bodyFlow', DEFAULT_FLOW_FIELD_BODY_FLOW);
+setFlowFieldSlider('recovery', DEFAULT_FLOW_FIELD_RECOVERY);
+setFlowFieldSlider('proximityFade', DEFAULT_FLOW_FIELD_PROXIMITY_FADE);
+setFlowFieldSlider('concentration', DEFAULT_FLOW_FIELD_CONCENTRATION);
+setFlowFieldGradient(DEFAULT_FLOW_FIELD_GRADIENT, ui.flowFieldGradientButtons.find((button) => button.dataset.flowGradient === DEFAULT_FLOW_FIELD_GRADIENT));
+setFlowFieldEnabled(false);
+setFlowFieldMenu(false);
 setTraceVisibility(false);
 setBodyPointsVisibility(false);
 setAnalysisWidth(390);
