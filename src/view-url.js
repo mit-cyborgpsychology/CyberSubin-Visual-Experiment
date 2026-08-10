@@ -18,7 +18,8 @@ const STRING_PARAMETERS = [
   'sequenceTransitionEasing',
   'sequenceTransitionDurations',
   'sequenceTransitionEasings',
-  'sequencePlaybackSpeeds'
+  'sequencePlaybackSpeeds',
+  'sequenceLoopMode'
 ];
 
 const NUMBER_PARAMETERS = [

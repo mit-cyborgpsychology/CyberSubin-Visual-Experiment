@@ -493,6 +493,7 @@ const ui = {
   sequenceStatus: document.querySelector('#sequence-status'),
   sequencePlay: document.querySelector('#sequence-play'),
   sequenceClear: document.querySelector('#sequence-clear'),
+  axisWidget: document.querySelector('.axis-widget'),
   sequenceDurationButtons: [...document.querySelectorAll('[data-sequence-duration]')],
   sequenceEasingButtons: [...document.querySelectorAll('[data-sequence-easing]')],
   sceneWrap: document.querySelector('#scene-wrap'),
@@ -607,6 +608,8 @@ const state = {
   sequencePendingPreviewIndex: null,
   sequencePendingProgress: null,
   sequenceResumePlaying: null,
+  sequenceLoopMode: 'loop',
+  sequenceEnded: false,
   sequenceTransitionDuration: SEQUENCE_TRANSITION_DURATION,
   sequenceTransitionEasing: 'ease',
   bones: new Map(),
@@ -717,8 +720,7 @@ scene.fog = new THREE.Fog(0x050607, 7.5, 16);
 
 const camera = new THREE.PerspectiveCamera(34, 1, 0.02, 100);
 const controls = new OrbitControls(camera, ui.threeCanvas);
-controls.enableDamping = true;
-controls.dampingFactor = 0.055;
+controls.enableDamping = false;
 controls.enablePan = false;
 controls.minDistance = 3.8;
 controls.maxDistance = 11;
@@ -796,6 +798,14 @@ const clock = new THREE.Clock();
 const tempVector = new THREE.Vector3();
 const tempVectorB = new THREE.Vector3();
 const tempVectorC = new THREE.Vector3();
+const axisWidgetQuaternion = new THREE.Quaternion();
+const axisWidgetDirection = new THREE.Vector3();
+const AXIS_WIDGET_ORIGIN = Object.freeze({ x: 21, y: 21 });
+const AXIS_WIDGET_AXES = Object.freeze([
+  Object.freeze({ key: 'x', direction: new THREE.Vector3(1, 0, 0) }),
+  Object.freeze({ key: 'y', direction: new THREE.Vector3(0, 1, 0) }),
+  Object.freeze({ key: 'z', direction: new THREE.Vector3(0, 0, 1) })
+]);
 const flowFieldCenter = new THREE.Vector3(0, DISPLAY_HEIGHT * 0.5, 0);
 const flowFieldDirection = new THREE.Vector3(1, 0, 0);
 const flowFieldViewDirection = new THREE.Vector3(0, 0, -1);
@@ -1096,6 +1106,12 @@ function updateSequenceProgressIndicators() {
   const active = state.sequenceActive && state.sequenceReady && state.sequenceActions.length > 0;
   const transition = active ? state.sequenceTransition : null;
   const currentIndex = active ? state.sequenceIndex : -1;
+  const visibleMovement = MOVEMENTS[state.movementIndex];
+  const inactivePreview = !active
+    && state.sequenceTimelineOpen
+    && state.ready
+    && state.action
+    && state.sequence.length > 0;
 
   ui.sequenceTrack.querySelectorAll('[data-sequence-index]').forEach((card) => {
     const index = Number(card.dataset.sequenceIndex);
@@ -1116,6 +1132,17 @@ function updateSequenceProgressIndicators() {
             )
           : 0;
       }
+    } else if (
+      inactivePreview
+      && index === state.sequenceIndex
+      && state.sequence[index]?.movementId === visibleMovement?.id
+    ) {
+      const playableDuration = Math.max(0.001, state.duration - state.clipStart);
+      progress = THREE.MathUtils.clamp(
+        (state.action.time - state.clipStart) / playableDuration,
+        0,
+        1
+      );
     }
 
     card.style.setProperty('--sequence-box-progress', String(progress));
@@ -1181,7 +1208,9 @@ function renderSequenceTimeline() {
     ui.sequenceStatus.textContent = `LOADING ${state.sequence.length} MOVEMENT${state.sequence.length === 1 ? '' : 'S'}…`;
   } else if (state.sequenceActive && state.sequence.length) {
     const activeNumber = Math.min(state.sequenceIndex + 1, state.sequence.length);
-    ui.sequenceStatus.textContent = state.sequenceTransition?.preview
+    ui.sequenceStatus.textContent = state.sequenceEnded
+      ? 'SEQUENCE COMPLETE · FINAL POSE HELD'
+      : state.sequenceTransition?.preview
       ? `PREVIEWING ${String(state.sequenceTransition.fromIndex + 1).padStart(2, '0')} → ${String(state.sequenceTransition.toIndex + 1).padStart(2, '0')}`
       : `SEQUENCE ON · ${String(activeNumber).padStart(2, '0')} / ${String(state.sequence.length).padStart(2, '0')}`;
   } else {
@@ -1212,6 +1241,7 @@ function renderSequenceTimeline() {
     const transitionDuration = entry.transitionDuration ?? SEQUENCE_TRANSITION_DURATION;
     const transitionEasing = entry.transitionEasing === 'linear' ? 'linear' : 'ease';
     const playbackSpeed = entry.playbackSpeed ?? DEFAULT_SPEED;
+    const isLast = index === state.sequence.length - 1;
     const playbackSpeedOptions = PLAYBACK_SPEED_OPTIONS.map((speed) => (
       `<option value="${speed}" ${Math.abs(playbackSpeed - speed) < 0.001 ? 'selected' : ''}>${speed}×</option>`
     )).join('');
@@ -1229,13 +1259,13 @@ function renderSequenceTimeline() {
           <small>${escapeSequenceMarkup(movement.english.trim())}</small>
         </button>
         <label>
-          <span>EDIT MOVEMENT</span>
+          <span>EDIT</span>
           <select data-sequence-movement aria-label="Edit sequence item ${index + 1}">
             ${movementOptions.replace(`value="${movement.id}"`, `value="${movement.id}" selected`)}
           </select>
         </label>
         <label class="sequence-clip__speed">
-          <span>PLAYBACK SPEED</span>
+          <span>SPEED</span>
           <select data-sequence-playback-speed="${index}" aria-label="Movement ${index + 1} playback speed">
             ${playbackSpeedOptions}
           </select>
@@ -1243,19 +1273,28 @@ function renderSequenceTimeline() {
         <i class="sequence-box-progress" aria-hidden="true"></i>
       </article>
       <article
-        class="sequence-transition${transitionActive ? ' active' : ''}${index === state.sequence.length - 1 ? ' sequence-transition--loop' : ''}"
+        class="sequence-transition${transitionActive ? ' active' : ''}${isLast ? ' sequence-transition--loop' : ''}"
         data-sequence-transition-card="${index}"
       >
+        ${isLast ? `
+          <div class="sequence-loop-mode" role="group" aria-label="Sequence ending behavior">
+            <button class="${state.sequenceLoopMode === 'loop' ? 'active' : ''}" type="button" data-sequence-loop-mode="loop">LOOP</button>
+            <button class="${state.sequenceLoopMode === 'end' ? 'active' : ''}" type="button" data-sequence-loop-mode="end">END</button>
+          </div>` : ''}
         <button
           class="sequence-transition__preview"
           type="button"
           data-sequence-transition="${index}"
-          ${state.sequence.length < 2 ? 'disabled' : ''}
+          ${isLast && state.sequenceLoopMode === 'end' ? 'disabled' : ''}
           aria-label="Preview transition from sequence item ${index + 1} to ${nextIndex + 1}"
         >
-          <span>→</span>
-          <strong>${index === state.sequence.length - 1 ? 'LOOP TO 01' : 'TRANSITION'}</strong>
-          <small>CLICK TO PREVIEW</small>
+          <span aria-hidden="true">${isLast
+            ? state.sequenceLoopMode === 'loop'
+              ? `<svg class="sequence-loop-arrow" viewBox="0 0 52 40"><path d="M15 4 5 12l10 8M6 12h28c8 0 13 5 13 12s-5 12-13 12H6" /></svg>`
+              : '■'
+            : `<svg class="sequence-transition-arrow" viewBox="0 0 52 40"><path d="M7 20h36M34 11l9 9-9 9" /></svg>`}</span>
+          <strong>${isLast ? (state.sequenceLoopMode === 'loop' ? 'LOOP TO 01' : 'END SEQUENCE') : 'TRANSITION'}</strong>
+          <small>${isLast && state.sequenceLoopMode === 'end' ? 'HOLD FINAL POSE' : 'CLICK TO PREVIEW'}</small>
         </button>
         <label class="sequence-transition__speed">
           <span>SPEED</span>
@@ -1336,6 +1375,7 @@ function setSequenceRuntime(index, localTime = 0, { preserveTrails = false } = {
   if (!runtime || !state.mixer) return;
   state.mixer.stopAllAction();
   state.sequenceTransition = null;
+  state.sequenceEnded = false;
   runtime.action.reset();
   runtime.action.enabled = true;
   runtime.action.setEffectiveTimeScale(1);
@@ -1372,6 +1412,9 @@ async function initializeSequencePlayback() {
       const clip = source.clip.clone();
       clip.name = `sequence-${entries[index].uid}`;
       const action = state.mixer.clipAction(clip);
+      const loopClip = clip.clone();
+      loopClip.name = `sequence-loop-${entries[index].uid}`;
+      const loopAction = state.mixer.clipAction(loopClip);
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = true;
       action.enabled = true;
@@ -1381,7 +1424,8 @@ async function initializeSequencePlayback() {
         clip,
         clipStart: source.clipStart,
         playableDuration: Math.max(0.001, clip.duration - source.clipStart),
-        action
+        action,
+        loopAction
       };
     });
     state.sequencePreparing = false;
@@ -1426,6 +1470,7 @@ function startSequence({ startIndex = 0, previewIndex = null } = {}) {
   if (!state.sequence.length) return;
   if (state.sequenceResumePlaying === null) state.sequenceResumePlaying = state.playing;
   state.sequenceActive = true;
+  state.sequenceEnded = false;
   state.sequencePendingStartIndex = startIndex;
   state.sequencePendingPreviewIndex = previewIndex;
   state.sequenceTransition = null;
@@ -1451,6 +1496,7 @@ function stopSequence({ reloadModel = true } = {}) {
   state.sequenceReady = false;
   state.sequencePreparing = false;
   state.sequenceTransition = null;
+  state.sequenceEnded = false;
   state.sequenceActions = [];
   state.sequenceResumePlaying = null;
   state.sequencePendingProgress = null;
@@ -1552,6 +1598,12 @@ function setSequenceEntryPlaybackSpeed(index, value) {
   renderSequenceTimeline();
 }
 
+function setSequenceLoopMode(value) {
+  state.sequenceLoopMode = value === 'end' ? 'end' : 'loop';
+  if (state.sequenceLoopMode === 'loop') state.sequenceEnded = false;
+  renderSequenceTimeline();
+}
+
 function applyPlaybackSpeedToAllSequenceEntries() {
   if (!state.sequence.length) return;
   state.sequence.forEach((entry) => {
@@ -1571,6 +1623,7 @@ function clearSequence() {
   state.sequenceResumePlaying = null;
   state.sequencePendingProgress = null;
   state.sequenceTransition = null;
+  state.sequenceEnded = false;
   renderSequenceTimeline();
   if (wasActive && state.ready) {
     const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === ui.select.value);
@@ -1579,38 +1632,46 @@ function clearSequence() {
 }
 
 function beginSequenceTransition(fromIndex, preview = false) {
-  if (state.sequenceActions.length < 2 || state.sequenceTransition) return false;
+  if (!state.sequenceActions.length || state.sequenceTransition) return false;
   const toIndex = (fromIndex + 1) % state.sequenceActions.length;
   const from = getSequenceRuntime(fromIndex);
   const to = getSequenceRuntime(toIndex);
   if (!from || !to) return false;
+  const selfLoop = fromIndex === toIndex;
+  if (selfLoop && state.sequenceLoopMode === 'end') return false;
   const duration = getSequenceTransitionDuration(fromIndex, toIndex);
+  const fromAction = from.action;
+  const toAction = selfLoop ? to.loopAction : to.action;
 
-  to.action.reset();
-  to.action.enabled = true;
-  to.action.setEffectiveTimeScale(1);
-  to.action.setEffectiveWeight(0);
-  to.action.setLoop(THREE.LoopOnce, 1);
-  to.action.clampWhenFinished = true;
-  to.action.play();
-  to.action.time = to.clipStart;
-  from.action.enabled = true;
-  from.action.setEffectiveWeight(1);
+  toAction.reset();
+  toAction.enabled = true;
+  toAction.setEffectiveTimeScale(1);
+  toAction.setEffectiveWeight(0);
+  toAction.setLoop(THREE.LoopOnce, 1);
+  toAction.clampWhenFinished = true;
+  toAction.play();
+  toAction.time = to.clipStart;
+  fromAction.enabled = true;
+  fromAction.setEffectiveWeight(1);
   state.sequenceTransition = {
     fromIndex,
     toIndex,
     duration,
     elapsed: 0,
     easing: getSequenceTransitionEasing(fromIndex),
-    preview
+    preview,
+    selfLoop,
+    fromAction,
+    toAction
   };
   renderSequenceTimeline();
   return true;
 }
 
 function previewSequenceTransition(fromIndex) {
-  if (state.sequence.length < 2) return;
+  if (!state.sequence.length) return;
   const normalizedIndex = THREE.MathUtils.clamp(Number(fromIndex) || 0, 0, state.sequence.length - 1);
+  if (normalizedIndex === state.sequence.length - 1 && state.sequenceLoopMode === 'end') return;
   if (!state.sequenceActive || !state.sequenceReady) {
     state.sequenceResumePlaying = true;
     startSequence({ startIndex: normalizedIndex, previewIndex: normalizedIndex });
@@ -1673,14 +1734,18 @@ function advanceSequencePlayback(delta) {
       transition.duration ? transition.elapsed / transition.duration : 1,
       transition.easing
     );
-    from.action.setEffectiveWeight(1 - blendWeight);
-    to.action.setEffectiveWeight(blendWeight);
+    transition.fromAction.setEffectiveWeight(1 - blendWeight);
+    transition.toAction.setEffectiveWeight(blendWeight);
     state.mixer.update(delta);
     if (transition.elapsed + 0.0001 < transition.duration) return false;
 
-    from.action.stop();
-    to.action.enabled = true;
-    to.action.setEffectiveWeight(1);
+    transition.fromAction.stop();
+    transition.toAction.enabled = true;
+    transition.toAction.setEffectiveWeight(1);
+    if (transition.selfLoop) {
+      to.action = transition.toAction;
+      to.loopAction = transition.fromAction;
+    }
     updateSequenceRuntimeSelection(to, transition.toIndex);
     state.sequenceTransition = null;
     const looped = transition.toIndex === 0;
@@ -1693,12 +1758,19 @@ function advanceSequencePlayback(delta) {
   state.mixer.update(delta);
   const runtime = getSequenceRuntime();
   if (!runtime) return false;
-  if (state.sequenceActions.length === 1 && runtime.action.time >= runtime.clip.duration - 0.001) {
-    runtime.action.reset().play();
-    runtime.action.time = runtime.clipStart;
+  const isLast = state.sequenceIndex === state.sequenceActions.length - 1;
+  if (
+    isLast
+    && state.sequenceLoopMode === 'end'
+    && runtime.action.time >= runtime.clip.duration - 0.001
+  ) {
+    runtime.action.time = runtime.clip.duration;
     state.mixer.update(0);
-    state.lastClipTime = runtime.clipStart;
-    return true;
+    state.lastClipTime = runtime.clip.duration;
+    state.sequenceEnded = true;
+    setPlaying(false);
+    renderSequenceTimeline();
+    return false;
   }
 
   const nextIndex = (state.sequenceIndex + 1) % state.sequenceActions.length;
@@ -2481,6 +2553,7 @@ function getCurrentViewState(
     sequenceTransitionDurations: state.sequence.map((entry) => entry.transitionDuration).join(','),
     sequenceTransitionEasings: state.sequence.map((entry) => entry.transitionEasing).join(','),
     sequencePlaybackSpeeds: state.sequence.map((entry) => entry.playbackSpeed).join(','),
+    sequenceLoopMode: state.sequenceLoopMode,
     flowFieldSpeed: state.flowFieldSpeed,
     flowFieldCount: state.flowFieldCount,
     flowFieldGradient: state.flowFieldGradient,
@@ -2610,6 +2683,9 @@ function applyViewState(view) {
   }
   if (typeof view.sequenceTransitionEasing === 'string') {
     setSequenceTransitionEasing(view.sequenceTransitionEasing);
+  }
+  if (typeof view.sequenceLoopMode === 'string') {
+    setSequenceLoopMode(view.sequenceLoopMode);
   }
   if (typeof view.sequence === 'string') {
     const nextSequenceIds = parseSequenceEntries(view.sequence).map((entry) => entry.movementId);
@@ -3672,6 +3748,32 @@ function getEmbeddedAvatarCenterY() {
   return (tempVector.y + lowerY) * 0.5;
 }
 
+function updateAxisWidget() {
+  if (!ui.axisWidget || EMBEDDED_VIEW) return;
+
+  axisWidgetQuaternion.copy(camera.quaternion).invert();
+  for (const axis of AXIS_WIDGET_AXES) {
+    axisWidgetDirection.copy(axis.direction).applyQuaternion(axisWidgetQuaternion);
+    const screenX = axisWidgetDirection.x;
+    const screenY = -axisWidgetDirection.y;
+    const planarLength = Math.hypot(screenX, screenY);
+    const angle = planarLength > 0.0001 ? Math.atan2(screenY, screenX) : 0;
+    const lineLength = 7 + planarLength * 12;
+    const labelDistance = lineLength + 5;
+
+    ui.axisWidget.style.setProperty(`--axis-${axis.key}-angle`, `${angle}rad`);
+    ui.axisWidget.style.setProperty(`--axis-${axis.key}-length`, `${lineLength.toFixed(2)}px`);
+    ui.axisWidget.style.setProperty(
+      `--axis-${axis.key}-label-x`,
+      `${(AXIS_WIDGET_ORIGIN.x + Math.cos(angle) * labelDistance).toFixed(2)}px`
+    );
+    ui.axisWidget.style.setProperty(
+      `--axis-${axis.key}-label-y`,
+      `${(AXIS_WIDGET_ORIGIN.y + Math.sin(angle) * labelDistance).toFixed(2)}px`
+    );
+  }
+}
+
 function fitCamera() {
   if (EMBEDDED_VIEW) {
     const centerY = getEmbeddedAvatarCenterY();
@@ -3858,6 +3960,9 @@ function getPlaybackTiming() {
 }
 
 function setPlaying(playing) {
+  if (playing && state.sequenceEnded && state.sequenceActive && state.sequenceReady) {
+    setSequenceRuntime(0, 0, { preserveTrails: true });
+  }
   state.playing = playing;
   if (state.sequencePreparing) state.sequenceResumePlaying = playing;
   ui.playButton.classList.toggle('paused', !playing);
@@ -4502,6 +4607,7 @@ function animate() {
   }
 
   controls.update(rawDelta);
+  updateAxisWidget();
   if (!EMBEDDED_VIEW && state.ready) {
     shareUrlElapsed += rawDelta;
     if (shareUrlElapsed >= 0.25) {
@@ -4545,6 +4651,11 @@ for (const button of ui.sequenceEasingButtons) {
   button.addEventListener('click', () => setSequenceTransitionEasing(button.dataset.sequenceEasing));
 }
 ui.sequenceTrack.addEventListener('click', (event) => {
+  const loopModeButton = event.target.closest('[data-sequence-loop-mode]');
+  if (loopModeButton) {
+    setSequenceLoopMode(loopModeButton.dataset.sequenceLoopMode);
+    return;
+  }
   const easingButton = event.target.closest('[data-sequence-transition-easing]');
   if (easingButton) {
     setSequenceEntryTransitionEasing(

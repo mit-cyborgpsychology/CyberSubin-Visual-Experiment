@@ -182,6 +182,7 @@ function clearSequenceFromView(viewState) {
   nextView.sequenceTransitionDurations = '';
   nextView.sequenceTransitionEasings = '';
   nextView.sequencePlaybackSpeeds = '';
+  nextView.sequenceLoopMode = 'loop';
   return nextView;
 }
 
@@ -474,6 +475,7 @@ function applyCellStyleToAll(sourceIndex) {
     sequenceTransitionDurations: _sourceSequenceTransitionDurations,
     sequenceTransitionEasings: _sourceSequenceTransitionEasings,
     sequencePlaybackSpeeds: _sourceSequencePlaybackSpeeds,
+    sequenceLoopMode: _sourceSequenceLoopMode,
     ...sourceStyle
   } = sourceView;
   cells.forEach((cell) => {
@@ -515,7 +517,8 @@ function applyCellSequenceToAll(sourceIndex) {
       sequenceTransitionEasing: sourceCell.viewState.sequenceTransitionEasing,
       sequenceTransitionDurations: sourceCell.viewState.sequenceTransitionDurations,
       sequenceTransitionEasings: sourceCell.viewState.sequenceTransitionEasings,
-      sequencePlaybackSpeeds: sourceCell.viewState.sequencePlaybackSpeeds
+      sequencePlaybackSpeeds: sourceCell.viewState.sequencePlaybackSpeeds,
+      sequenceLoopMode: sourceCell.viewState.sequenceLoopMode
     };
     if (firstMovement) cell.avatarSelect.value = firstMovement;
     sendCommand(cell, 'viewState', cell.viewState);
