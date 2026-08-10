@@ -59,6 +59,7 @@ const CURVE_HISTORY_LENGTH = 108;
 const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
 const DEFAULT_SPEED = 3;
+const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5]);
 const DEFAULT_AVATAR_COLOR = 'lightGrey';
 const DEFAULT_AVATAR_GRADIENT_COLOR = '#d9dcde';
 const DEFAULT_SURFACE_MODE = 'smooth';
@@ -382,7 +383,10 @@ function createSequenceEntry(movementId, transition = {}) {
       0.2,
       5
     ),
-    transitionEasing: transition.easing === 'linear' ? 'linear' : 'ease'
+    transitionEasing: transition.easing === 'linear' ? 'linear' : 'ease',
+    playbackSpeed: PLAYBACK_SPEED_OPTIONS.includes(Number(transition.speed))
+      ? Number(transition.speed)
+      : DEFAULT_SPEED
   };
 }
 
@@ -506,6 +510,8 @@ const ui = {
   timeline: document.querySelector('#timeline'),
   resetButton: document.querySelector('#reset-button'),
   speedButtons: [...document.querySelectorAll('[data-speed]')],
+  speedControlLabel: document.querySelector('#speed-control-label'),
+  applySequenceSpeedAll: document.querySelector('#apply-sequence-speed-all'),
   avatarStyleToggle: document.querySelector('#avatar-style-toggle'),
   avatarStyleClose: document.querySelector('#avatar-style-close'),
   avatarStyleStatus: document.querySelector('#avatar-style-status'),
@@ -1086,11 +1092,65 @@ function getSequenceElapsedTime() {
     + THREE.MathUtils.clamp(runtime.action.time - runtime.clipStart, 0, runtime.playableDuration);
 }
 
+function updateSequenceProgressIndicators() {
+  const active = state.sequenceActive && state.sequenceReady && state.sequenceActions.length > 0;
+  const transition = active ? state.sequenceTransition : null;
+  const currentIndex = active ? state.sequenceIndex : -1;
+
+  ui.sequenceTrack.querySelectorAll('[data-sequence-index]').forEach((card) => {
+    const index = Number(card.dataset.sequenceIndex);
+    let progress = 0;
+
+    if (active) {
+      if (transition) {
+        progress = index <= transition.fromIndex ? 1 : 0;
+      } else if (index < currentIndex) {
+        progress = 1;
+      } else if (index === currentIndex) {
+        const runtime = getSequenceRuntime(index);
+        progress = runtime
+          ? THREE.MathUtils.clamp(
+              (runtime.action.time - runtime.clipStart) / runtime.playableDuration,
+              0,
+              1
+            )
+          : 0;
+      }
+    }
+
+    card.style.setProperty('--sequence-box-progress', String(progress));
+  });
+
+  ui.sequenceTrack.querySelectorAll('[data-sequence-transition-card]').forEach((card) => {
+    const index = Number(card.dataset.sequenceTransitionCard);
+    let progress = 0;
+
+    if (active) {
+      if (transition) {
+        if (index < transition.fromIndex) {
+          progress = 1;
+        } else if (index === transition.fromIndex) {
+          progress = transition.duration
+            ? THREE.MathUtils.clamp(transition.elapsed / transition.duration, 0, 1)
+            : 1;
+        }
+      } else if (index < currentIndex) {
+        progress = 1;
+      }
+    }
+
+    card.style.setProperty('--sequence-box-progress', String(progress));
+  });
+}
+
 function setSequenceTimelineOpen(open) {
   state.sequenceTimelineOpen = Boolean(open) && !EMBEDDED_VIEW;
   ui.sequenceTimelinePanel.hidden = !state.sequenceTimelineOpen;
   ui.sequenceTimelineToggle.setAttribute('aria-expanded', String(state.sequenceTimelineOpen));
   ui.sequenceTimelineToggleStatus.textContent = state.sequenceTimelineOpen ? 'HIDE' : 'SHOW';
+  ui.speedControlLabel.textContent = state.sequence.length && state.sequenceTimelineOpen
+    ? 'CURRENT'
+    : 'SPEED';
   document.body.classList.toggle('sequence-timeline-open', state.sequenceTimelineOpen);
 }
 
@@ -1107,6 +1167,13 @@ function updateAddToSequenceAvailability() {
 
 function renderSequenceTimeline() {
   updateAddToSequenceAvailability();
+  ui.speedControlLabel.textContent = state.sequence.length && state.sequenceTimelineOpen
+    ? 'CURRENT'
+    : 'SPEED';
+  ui.applySequenceSpeedAll.disabled = state.sequence.length === 0;
+  ui.applySequenceSpeedAll.title = state.sequence.length
+    ? `Apply ${state.speed}× to every movement in this sequence`
+    : 'Add movements to a sequence first';
   ui.sequencePlay.disabled = state.sequence.length === 0 || state.sequencePreparing;
   ui.sequencePlay.textContent = state.sequenceActive ? 'STOP SEQUENCE' : 'PLAY SEQUENCE';
 
@@ -1139,11 +1206,15 @@ function renderSequenceTimeline() {
 
   ui.sequenceTrack.innerHTML = state.sequence.map((entry, index) => {
     const movement = getSequenceMovement(entry);
-    const active = state.sequenceActive && index === state.sequenceIndex;
+    const active = (state.sequenceActive || state.sequenceTimelineOpen) && index === state.sequenceIndex;
     const nextIndex = (index + 1) % state.sequence.length;
     const transitionActive = state.sequenceTransition?.fromIndex === index;
     const transitionDuration = entry.transitionDuration ?? SEQUENCE_TRANSITION_DURATION;
     const transitionEasing = entry.transitionEasing === 'linear' ? 'linear' : 'ease';
+    const playbackSpeed = entry.playbackSpeed ?? DEFAULT_SPEED;
+    const playbackSpeedOptions = PLAYBACK_SPEED_OPTIONS.map((speed) => (
+      `<option value="${speed}" ${Math.abs(playbackSpeed - speed) < 0.001 ? 'selected' : ''}>${speed}×</option>`
+    )).join('');
     return `
       <article class="sequence-clip${active ? ' active' : ''}" data-sequence-index="${index}">
         <div class="sequence-clip__toolbar">
@@ -1163,9 +1234,17 @@ function renderSequenceTimeline() {
             ${movementOptions.replace(`value="${movement.id}"`, `value="${movement.id}" selected`)}
           </select>
         </label>
+        <label class="sequence-clip__speed">
+          <span>PLAYBACK SPEED</span>
+          <select data-sequence-playback-speed="${index}" aria-label="Movement ${index + 1} playback speed">
+            ${playbackSpeedOptions}
+          </select>
+        </label>
+        <i class="sequence-box-progress" aria-hidden="true"></i>
       </article>
       <article
         class="sequence-transition${transitionActive ? ' active' : ''}${index === state.sequence.length - 1 ? ' sequence-transition--loop' : ''}"
+        data-sequence-transition-card="${index}"
       >
         <button
           class="sequence-transition__preview"
@@ -1191,11 +1270,13 @@ function renderSequenceTimeline() {
           <button class="${transitionEasing === 'linear' ? 'active' : ''}" type="button" data-sequence-transition-easing="linear" data-sequence-transition-index="${index}">LINEAR</button>
           <button class="${transitionEasing === 'ease' ? 'active' : ''}" type="button" data-sequence-transition-easing="ease" data-sequence-transition-index="${index}">EASE</button>
         </div>
+        <i class="sequence-box-progress" aria-hidden="true"></i>
       </article>`;
   }).join('') + `
     <button class="sequence-track-add" type="button" data-sequence-action="add" ${state.sequence.length >= MAX_SEQUENCE_LENGTH ? 'disabled' : ''}>
       <span>＋</span><strong>ADD SELECTED</strong>
     </button>`;
+  updateSequenceProgressIndicators();
 }
 
 function loadSequenceClipData(entry) {
@@ -1243,6 +1324,9 @@ function updateSequenceRuntimeSelection(runtime, index) {
   const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === runtime.movement.id);
   if (movementIndex >= 0) state.movementIndex = movementIndex;
   ui.select.value = runtime.movement.id;
+  const playbackSpeed = state.sequence[index]?.playbackSpeed ?? DEFAULT_SPEED;
+  state.speed = playbackSpeed;
+  updatePlaybackSpeedButtons(playbackSpeed);
   updateMovementInformation(runtime.movement);
   updateAddToSequenceAvailability();
 }
@@ -1403,6 +1487,7 @@ function refreshSequenceAfterEdit(preferredIndex = 0) {
 function addSelectedMovementToSequence() {
   const entry = createSequenceEntry(ui.select.value);
   if (!entry || state.sequence.length >= MAX_SEQUENCE_LENGTH) return;
+  entry.playbackSpeed = state.speed;
   state.sequence.push(entry);
   setSequenceTimelineOpen(true);
   refreshSequenceAfterEdit(state.sequence.length - 1);
@@ -1452,6 +1537,26 @@ function setSequenceEntryTransitionEasing(index, value) {
   if (state.sequenceTransition?.fromIndex === index) {
     state.sequenceTransition.easing = entry.transitionEasing;
   }
+  renderSequenceTimeline();
+}
+
+function setSequenceEntryPlaybackSpeed(index, value) {
+  const entry = state.sequence[index];
+  const speed = Number(value);
+  if (!entry || !PLAYBACK_SPEED_OPTIONS.includes(speed)) return;
+  entry.playbackSpeed = speed;
+  if ((state.sequenceActive || state.sequenceTimelineOpen) && state.sequenceIndex === index) {
+    state.speed = speed;
+    updatePlaybackSpeedButtons(speed);
+  }
+  renderSequenceTimeline();
+}
+
+function applyPlaybackSpeedToAllSequenceEntries() {
+  if (!state.sequence.length) return;
+  state.sequence.forEach((entry) => {
+    entry.playbackSpeed = state.speed;
+  });
   renderSequenceTimeline();
 }
 
@@ -2375,6 +2480,7 @@ function getCurrentViewState(
     sequenceTransitionEasing: state.sequenceTransitionEasing,
     sequenceTransitionDurations: state.sequence.map((entry) => entry.transitionDuration).join(','),
     sequenceTransitionEasings: state.sequence.map((entry) => entry.transitionEasing).join(','),
+    sequencePlaybackSpeeds: state.sequence.map((entry) => entry.playbackSpeed).join(','),
     flowFieldSpeed: state.flowFieldSpeed,
     flowFieldCount: state.flowFieldCount,
     flowFieldGradient: state.flowFieldGradient,
@@ -2511,17 +2617,25 @@ function applyViewState(view) {
       .split(',')
       .map(Number);
     const nextEasings = String(view.sequenceTransitionEasings ?? '').split(',');
+    const nextPlaybackSpeeds = String(view.sequencePlaybackSpeeds ?? '')
+      .split(',')
+      .map(Number);
     const nextEntries = nextSequenceIds.map((movementId, index) => createSequenceEntry(movementId, {
       duration: Number.isFinite(nextDurations[index]) && nextDurations[index] > 0
         ? nextDurations[index]
         : view.sequenceTransitionDuration,
-      easing: nextEasings[index] || view.sequenceTransitionEasing
+      easing: nextEasings[index] || view.sequenceTransitionEasing,
+      speed: PLAYBACK_SPEED_OPTIONS.includes(nextPlaybackSpeeds[index])
+        ? nextPlaybackSpeeds[index]
+        : state.speed
     })).filter(Boolean);
     const currentDurations = state.sequence.map((entry) => entry.transitionDuration).join(',');
     const currentEasings = state.sequence.map((entry) => entry.transitionEasing).join(',');
+    const currentPlaybackSpeeds = state.sequence.map((entry) => entry.playbackSpeed).join(',');
     const sequenceChanged = nextSequenceIds.join(',') !== getSequenceIds().join(',')
       || nextEntries.map((entry) => entry.transitionDuration).join(',') !== currentDurations
-      || nextEntries.map((entry) => entry.transitionEasing).join(',') !== currentEasings;
+      || nextEntries.map((entry) => entry.transitionEasing).join(',') !== currentEasings
+      || nextEntries.map((entry) => entry.playbackSpeed).join(',') !== currentPlaybackSpeeds;
     if (sequenceChanged) {
       state.sequenceLoadToken += 1;
       state.sequence = nextEntries;
@@ -3750,12 +3864,20 @@ function setPlaying(playing) {
   ui.playButton.setAttribute('aria-label', playing ? 'Pause animation' : 'Play animation');
 }
 
-function setPlaybackSpeed(speed) {
-  if (!Number.isFinite(speed) || speed <= 0) return;
-  state.speed = speed;
+function updatePlaybackSpeedButtons(speed) {
   ui.speedButtons.forEach((button) => {
     button.classList.toggle('active', Number(button.dataset.speed) === speed);
   });
+}
+
+function setPlaybackSpeed(speed) {
+  if (!Number.isFinite(speed) || speed <= 0) return;
+  state.speed = speed;
+  if ((state.sequenceActive || state.sequenceTimelineOpen) && state.sequence[state.sequenceIndex]) {
+    state.sequence[state.sequenceIndex].playbackSpeed = speed;
+    renderSequenceTimeline();
+  }
+  updatePlaybackSpeedButtons(speed);
 }
 
 function seekToProgress(progress) {
@@ -4389,6 +4511,7 @@ function animate() {
   }
   if (state.ready && state.surfaceMode === 'points') updateAvatarPointCloud();
   if (state.ready && state.surfaceMode === 'skeleton') updateAvatarSkeleton();
+  updateSequenceProgressIndicators();
   updateTransport();
   if (!EMBEDDED_VIEW) drawSignalCharts();
   renderer.render(scene, camera);
@@ -4414,6 +4537,7 @@ ui.sequencePlay.addEventListener('click', () => {
   }
 });
 ui.sequenceClear.addEventListener('click', clearSequence);
+ui.applySequenceSpeedAll.addEventListener('click', applyPlaybackSpeedToAllSequenceEntries);
 for (const button of ui.sequenceDurationButtons) {
   button.addEventListener('click', () => setSequenceTransitionDuration(button.dataset.sequenceDuration));
 }
@@ -4444,6 +4568,14 @@ ui.sequenceTrack.addEventListener('click', (event) => {
   if (actionButton.dataset.sequenceAction === 'jump') jumpToSequenceClip(index);
 });
 ui.sequenceTrack.addEventListener('change', (event) => {
+  const playbackSpeed = event.target.closest('[data-sequence-playback-speed]');
+  if (playbackSpeed) {
+    setSequenceEntryPlaybackSpeed(
+      Number(playbackSpeed.dataset.sequencePlaybackSpeed),
+      playbackSpeed.value
+    );
+    return;
+  }
   const transitionDuration = event.target.closest('[data-sequence-transition-duration]');
   if (transitionDuration) {
     setSequenceEntryTransitionDuration(

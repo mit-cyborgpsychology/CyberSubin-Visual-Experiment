@@ -1463,7 +1463,7 @@ body.resizing-panel * {
   z-index: 20;
   min-width: 0;
   display: grid;
-  grid-template-columns: 70px 135px minmax(180px, 1fr) 360px 112px;
+  grid-template-columns: 70px 135px minmax(180px, 1fr) 430px 112px;
   align-items: center;
   border-top: 1px solid var(--line);
   background: #080a0c;
@@ -1599,6 +1599,20 @@ body.resizing-panel * {
   background: rgba(101, 243, 255, 0.07);
 }
 
+.speed-control .speed-apply-all {
+  min-width: 72px;
+  margin-left: 5px;
+  border-left: 1px solid rgba(101, 243, 255, 0.32);
+  color: var(--accent);
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.speed-control .speed-apply-all:disabled {
+  color: #3e454a;
+  cursor: not-allowed;
+}
+
 .reset-button {
   height: 100%;
   display: flex;
@@ -1655,7 +1669,7 @@ body.embedded-view .axis-widget {
   .analysis-panel { padding-inline: 18px; }
   .signal-row__axes { gap: 6px; }
   .signal-axis { gap: 2px; }
-  .transport { grid-template-columns: 70px 120px minmax(120px, 1fr) 330px 100px; }
+  .transport { grid-template-columns: 70px 120px minmax(120px, 1fr) 390px 100px; }
 }
 
 @media (max-width: 860px) {
@@ -2904,10 +2918,12 @@ body.embedded-view .axis-widget {
 }
 
 .sequence-clip {
+  position: relative;
+  overflow: hidden;
   flex: 0 0 218px;
   min-width: 0;
   display: grid;
-  grid-template-rows: 30px minmax(0, 1fr) 44px;
+  grid-template-rows: 30px minmax(0, 1fr) 44px 38px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: #07090a;
   transition: border-color 150ms ease, background 150ms ease;
@@ -3007,6 +3023,15 @@ body.embedded-view .axis-widget {
   letter-spacing: 0.1em;
 }
 
+.sequence-clip__speed > span {
+  color: rgba(101, 243, 255, 0.7) !important;
+}
+
+.sequence-clip__speed select {
+  color: var(--accent);
+  font-weight: 750;
+}
+
 .sequence-clip select {
   width: 100%;
   height: 100%;
@@ -3021,6 +3046,8 @@ body.embedded-view .axis-widget {
 }
 
 .sequence-transition {
+  position: relative;
+  overflow: hidden;
   flex: 0 0 178px;
   display: grid;
   grid-template-rows: minmax(0, 1fr) 38px 32px;
@@ -3141,6 +3168,25 @@ body.embedded-view .axis-widget {
   border-color: rgba(255, 255, 255, 0.07);
   color: #3c4145;
   cursor: not-allowed;
+}
+
+.sequence-box-progress {
+  position: absolute;
+  z-index: 4;
+  right: auto;
+  bottom: 0;
+  left: 0;
+  width: calc(var(--sequence-box-progress, 0) * 100%);
+  height: 4px;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(101, 243, 255, 0.55);
+  pointer-events: none;
+  transition: width 70ms linear;
+}
+
+.sequence-transition .sequence-box-progress {
+  background: #fb5c50;
+  box-shadow: 0 0 10px rgba(251, 92, 80, 0.5);
 }
 
 .sequence-track-add,
