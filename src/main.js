@@ -481,6 +481,7 @@ const ui = {
   resetAll: document.querySelector('#reset-all'),
   hideControlButtons: document.querySelector('#hide-control-buttons'),
   hideAllUi: document.querySelector('#hide-all-ui'),
+  viewerOptions: document.querySelector('#viewer-options'),
   effectMenuSlot: document.querySelector('#effect-menu-slot'),
   effectMenuStack: document.querySelector('.effect-menu-stack'),
   select: document.querySelector('#dance-select'),
@@ -723,7 +724,7 @@ const controls = new OrbitControls(camera, ui.threeCanvas);
 controls.enableDamping = false;
 controls.enablePan = false;
 controls.minDistance = 3.8;
-controls.maxDistance = 11;
+controls.maxDistance = 20;
 controls.minPolarAngle = Math.PI * 0.18;
 controls.maxPolarAngle = Math.PI * 0.78;
 controls.autoRotate = false;
@@ -1916,6 +1917,7 @@ function styleModel(root) {
         material.emissive.set('#071012');
         material.emissiveIntensity = 0.18;
       }
+      material.fog = false;
       material.side = THREE.DoubleSide;
       material.stencilWrite = true;
       material.stencilRef = 1;
@@ -2056,7 +2058,8 @@ function createAvatarRepresentations(root) {
         sizeAttenuation: true,
         transparent: true,
         opacity: 0.98,
-        depthWrite: false
+        depthWrite: false,
+        fog: false
       })
     );
     points.frustumCulled = false;
@@ -2105,7 +2108,8 @@ function createAvatarRepresentations(root) {
       opacity: 1,
       depthTest: false,
       depthWrite: false,
-      toneMapped: false
+      toneMapped: false,
+      fog: false
     }),
     skeletonBones.length
   );
@@ -2203,6 +2207,7 @@ function setAvatarStyleOpen(open) {
   ui.avatarStyleToggle.setAttribute('aria-expanded', String(open));
   ui.avatarStyleStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.avatarStylePanel.hidden = !open;
+  applyAvatarScreenOffset();
 }
 
 function setAvatarColor(color, activeButton) {
@@ -3697,14 +3702,38 @@ function resetTrackerSamples({ preserveTrails = false } = {}) {
 function applyAvatarScreenOffset() {
   const width = Math.max(1, ui.sceneWrap.clientWidth);
   const height = Math.max(1, ui.sceneWrap.clientHeight);
+  const interfaceVisible = !document.body.classList.contains('interface-hidden');
+  const wideLayout = window.innerWidth > 860;
   const analysisInset = !EMBEDDED_VIEW
     && state.analysisVisible
-    && !document.body.classList.contains('interface-hidden')
-    && window.innerWidth > 860
+    && interfaceVisible
+    && wideLayout
     ? Math.min(state.analysisWidth, width * 0.72)
     : 0;
-  const analysisCenterShift = -analysisInset / 2;
-  const screenX = (state.avatarOffsetX / 2.4) * width * 0.32 + analysisCenterShift;
+  const leftPanelOpen = state.avatarStyleOpen
+    || state.cameraControlsOpen
+    || state.lineControlsOpen
+    || state.visualizationMenuOpen
+    || state.flowFieldMenuOpen;
+  let leftInset = 0;
+  if (
+    !EMBEDDED_VIEW
+    && leftPanelOpen
+    && interfaceVisible
+    && wideLayout
+    && !document.body.classList.contains('controls-hidden')
+    && ui.viewerOptions
+  ) {
+    const sceneBounds = ui.sceneWrap.getBoundingClientRect();
+    const leftPanelBounds = ui.viewerOptions.getBoundingClientRect();
+    leftInset = THREE.MathUtils.clamp(
+      leftPanelBounds.right - sceneBounds.left,
+      0,
+      width * 0.72
+    );
+  }
+  const interfaceCenterShift = (leftInset - analysisInset) / 2;
+  const screenX = (state.avatarOffsetX / 2.4) * width * 0.32 + interfaceCenterShift;
   const screenY = (state.avatarOffsetY / 1.8) * height * 0.28;
 
   if (Math.abs(screenX) < 0.01 && Math.abs(screenY) < 0.01) {
@@ -4166,6 +4195,7 @@ function setCameraControlsOpen(open) {
   ui.cameraControlsToggle.setAttribute('aria-expanded', String(open));
   ui.cameraControlsStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.cameraControlsPanel.hidden = !open;
+  applyAvatarScreenOffset();
 }
 
 function setLineControlsOpen(open) {
@@ -4174,6 +4204,7 @@ function setLineControlsOpen(open) {
   ui.lineControlsToggle.setAttribute('aria-expanded', String(open));
   ui.lineControlsStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.lineControlsPanel.hidden = !open;
+  applyAvatarScreenOffset();
 }
 
 function setInterfaceHidden(hidden) {
@@ -4189,6 +4220,7 @@ function setControlButtonsHidden(hidden) {
   ui.hideControlButtons.textContent = hidden ? 'SHOW BUTTONS' : 'HIDE BUTTONS';
   ui.hideControlButtons.setAttribute('aria-pressed', String(hidden));
   ui.hideControlButtons.setAttribute('aria-label', hidden ? 'Show interface control buttons' : 'Hide interface control buttons');
+  requestAnimationFrame(resize);
 }
 
 function setVisualizationMenu(open) {
@@ -4197,6 +4229,7 @@ function setVisualizationMenu(open) {
   ui.visualizationMenuToggle.setAttribute('aria-expanded', String(open));
   ui.visualizationMenuStatus.textContent = open ? 'OPEN' : 'SHOW';
   ui.visualizationMenuPanel.hidden = !open;
+  applyAvatarScreenOffset();
 }
 
 function updateFlowFieldDescription() {
@@ -4221,6 +4254,7 @@ function setFlowFieldMenu(open) {
   ui.flowFieldMenuToggle.setAttribute('aria-expanded', String(open));
   ui.flowFieldMenuStatus.textContent = open ? 'OPEN' : state.flowFieldEnabled ? 'ON' : 'SHOW';
   ui.flowFieldMenuPanel.hidden = !open;
+  applyAvatarScreenOffset();
 }
 
 function setFlowFieldEnabled(enabled) {
