@@ -3710,18 +3710,13 @@ function applyAvatarScreenOffset() {
     && wideLayout
     ? Math.min(state.analysisWidth, width * 0.72)
     : 0;
-  const leftPanelOpen = state.avatarStyleOpen
-    || state.cameraControlsOpen
-    || state.lineControlsOpen
-    || state.visualizationMenuOpen
-    || state.flowFieldMenuOpen;
+  const leftPanelVisible = !document.body.classList.contains('controls-hidden');
   let leftInset = 0;
   if (
     !EMBEDDED_VIEW
-    && leftPanelOpen
+    && leftPanelVisible
     && interfaceVisible
     && wideLayout
-    && !document.body.classList.contains('controls-hidden')
     && ui.viewerOptions
   ) {
     const sceneBounds = ui.sceneWrap.getBoundingClientRect();
