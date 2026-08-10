@@ -2613,7 +2613,15 @@ body.embedded-view .axis-widget {
 .viewer-options {
   width: min(260px, calc(100% - 62px));
   max-width: calc(100% - 62px);
+  max-height: calc(100% - 72px);
   align-items: stretch;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-color: rgba(101, 243, 255, 0.38) #050607;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
 }
 
 .viewer-options > .control-section,
@@ -2646,6 +2654,8 @@ body.embedded-view .axis-widget {
 .effect-menu-stack .visualization-menu-panel {
   width: 100%;
   max-width: 100%;
+  max-height: none;
+  overflow: visible;
 }
 
 .control-section-header--line {
