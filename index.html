@@ -20,11 +20,17 @@
 
         <div class="movement-picker">
           <label for="dance-select">SELECT MOVEMENT / เลือกท่ารำ</label>
-          <div class="select-wrap">
-            <select id="dance-select" aria-label="Select a Thai dance movement"></select>
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="m5 7.5 5 5 5-5" />
-            </svg>
+          <div class="movement-picker-row">
+            <div class="select-wrap">
+              <select id="dance-select" aria-label="Select a Thai dance movement"></select>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m5 7.5 5 5 5-5" />
+              </svg>
+            </div>
+            <button id="add-to-sequence" class="add-to-sequence-button" type="button">
+              <span aria-hidden="true">＋</span>
+              <strong>ADD TO<br>SEQUENCE</strong>
+            </button>
           </div>
         </div>
 
@@ -285,7 +291,31 @@
                 </button>
               </section>
 
+              <section class="control-section control-section--body-centering" aria-label="Body position behavior">
+                <button
+                  id="body-centering-toggle"
+                  class="control-section-toggle body-centering-toggle"
+                  type="button"
+                  aria-pressed="true"
+                  aria-label="Allow the avatar to move through space"
+                >
+                  <span>BODY POSITION</span><strong id="body-centering-status">FIXED CENTER</strong>
+                </button>
+              </section>
+
               <div id="effect-menu-slot" class="effect-menu-slot"></div>
+
+              <section class="control-section control-section--sequence" aria-label="Sequence timeline display">
+                <button
+                  id="sequence-timeline-toggle"
+                  class="control-section-toggle sequence-timeline-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="sequence-timeline-panel"
+                >
+                  <span>SEQUENCE TIMELINE</span><strong id="sequence-timeline-toggle-status">SHOW</strong>
+                </button>
+              </section>
 
               <section class="control-section control-section--analysis" aria-label="Motion analysis display">
                 <button
@@ -517,6 +547,21 @@
           </div>
         </aside>
       </main>
+
+      <section id="sequence-timeline-panel" class="sequence-timeline-panel" aria-label="Editable movement sequence timeline" hidden>
+        <header class="sequence-timeline-heading">
+          <div>
+            <span>SEQUENCE TIMELINE</span>
+            <strong id="sequence-status" aria-live="polite">EMPTY · ADD MOVEMENTS 1–59</strong>
+          </div>
+          <div class="sequence-timeline-actions">
+            <button id="sequence-play" type="button">PLAY SEQUENCE</button>
+            <button id="sequence-clear" type="button">CLEAR</button>
+            <button id="sequence-timeline-close" class="menu-panel-close" type="button" aria-label="Hide sequence timeline">×</button>
+          </div>
+        </header>
+        <div id="sequence-track" class="sequence-track" aria-live="polite"></div>
+      </section>
 
       <footer class="transport">
         <button id="play-button" class="play-button" type="button" aria-label="Pause animation">

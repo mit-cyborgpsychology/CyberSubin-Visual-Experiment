@@ -353,7 +353,7 @@ body.interface-hidden .avatar-grid {
 .avatar-card__header {
   min-width: 0;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1.4fr) minmax(0, 0.9fr) 58px 28px;
+  grid-template-columns: 24px minmax(0, 1.4fr) minmax(0, 0.9fr) 58px 48px 28px;
   align-items: center;
   gap: 5px;
   border-bottom: 1px solid var(--line);
@@ -392,7 +392,8 @@ body.interface-hidden .avatar-grid {
   display: none;
 }
 
-.avatar-card__apply-style {
+.avatar-card__apply-style,
+.avatar-card__apply-sequence {
   width: 58px;
   height: 30px;
   border: 1px solid rgba(101, 243, 255, 0.2);
@@ -404,18 +405,37 @@ body.interface-hidden .avatar-grid {
   cursor: pointer;
 }
 
-.avatar-card__apply-style:hover:not(:disabled) {
+.avatar-card__apply-sequence {
+  width: 48px;
+  border-color: rgba(251, 92, 80, 0.24);
+  color: #fb5c50;
+}
+
+.avatar-card__apply-style:hover:not(:disabled),
+.avatar-card__apply-sequence:hover:not(:disabled) {
   border-color: var(--accent);
   color: #d9fcff;
 }
 
-.avatar-card__apply-style.applied {
+.avatar-card__apply-style.applied,
+.avatar-card__apply-sequence.applied {
   border-color: var(--accent);
   background: var(--accent) !important;
   color: #020405;
 }
 
-.avatar-card__apply-style:disabled {
+.avatar-card__apply-sequence:hover:not(:disabled) {
+  border-color: #fb5c50;
+  color: #fff;
+}
+
+.avatar-card__apply-sequence.applied {
+  border-color: #fb5c50;
+  background: #fb5c50 !important;
+}
+
+.avatar-card__apply-style:disabled,
+.avatar-card__apply-sequence:disabled {
   border-color: rgba(255, 255, 255, 0.06);
   color: #3f454a;
   cursor: wait;

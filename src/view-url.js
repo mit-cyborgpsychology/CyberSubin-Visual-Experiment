@@ -13,7 +13,11 @@ const STRING_PARAMETERS = [
   'flowFieldGradient',
   'flowFieldColorStart',
   'flowFieldColorMiddle',
-  'flowFieldColorEnd'
+  'flowFieldColorEnd',
+  'sequence',
+  'sequenceTransitionEasing',
+  'sequenceTransitionDurations',
+  'sequenceTransitionEasings'
 ];
 
 const NUMBER_PARAMETERS = [
@@ -38,7 +42,8 @@ const NUMBER_PARAMETERS = [
   'flowFieldBodyFlow',
   'flowFieldRecovery',
   'flowFieldProximityFade',
-  'flowFieldConcentration'
+  'flowFieldConcentration',
+  'sequenceTransitionDuration'
 ];
 
 const BOOLEAN_PARAMETERS = [
@@ -46,6 +51,7 @@ const BOOLEAN_PARAMETERS = [
   'bodyPointsVisible',
   'traceDots',
   'traceSmoothing',
+  'bodyCenterLocked',
   'cameraOrbit',
   'analysisVisible',
   'avatarStyleOpen',
@@ -54,6 +60,8 @@ const BOOLEAN_PARAMETERS = [
   'visualizationMenuOpen',
   'flowFieldEnabled',
   'flowFieldMenuOpen',
+  'sequenceActive',
+  'sequenceTimelineOpen',
   'controlsHidden',
   'interfaceHidden'
 ];

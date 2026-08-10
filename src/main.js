@@ -82,6 +82,10 @@ const DEFAULT_FLOW_FIELD_BODY_FLOW = 1;
 const DEFAULT_FLOW_FIELD_RECOVERY = 1;
 const DEFAULT_FLOW_FIELD_PROXIMITY_FADE = 1;
 const DEFAULT_FLOW_FIELD_CONCENTRATION = 1;
+const SEQUENCE_TRANSITION_DURATION = 1.2;
+const INITIAL_POSE_TRIM_SECONDS = 0.35;
+const MAX_SEQUENCE_LENGTH = 24;
+let sequenceEntryCounter = 0;
 const FLOW_FIELD_SLIDER_CONFIG = Object.freeze({
   thickness: {
     stateKey: 'flowFieldThickness',
@@ -366,6 +370,34 @@ const EXTRA_MOVEMENTS = Object.entries(EXTRA_MODEL_URLS)
   }));
 const MOVEMENTS = [...INDEXED_MOVEMENTS, ...EXTRA_MOVEMENTS];
 
+function createSequenceEntry(movementId, transition = {}) {
+  const normalizedId = String(movementId);
+  if (!INDEXED_MOVEMENTS.some((movement) => movement.id === normalizedId)) return null;
+  sequenceEntryCounter += 1;
+  return {
+    uid: `sequence-${Date.now().toString(36)}-${sequenceEntryCounter.toString(36)}`,
+    movementId: normalizedId,
+    transitionDuration: THREE.MathUtils.clamp(
+      Number(transition.duration) || SEQUENCE_TRANSITION_DURATION,
+      0.2,
+      5
+    ),
+    transitionEasing: transition.easing === 'linear' ? 'linear' : 'ease'
+  };
+}
+
+function parseSequenceEntries(value) {
+  return String(value ?? '')
+    .split(',')
+    .map((movementId) => createSequenceEntry(movementId.trim()))
+    .filter(Boolean)
+    .slice(0, MAX_SEQUENCE_LENGTH);
+}
+
+function getSequenceMovement(entry) {
+  return INDEXED_MOVEMENTS.find((movement) => movement.id === entry?.movementId) ?? null;
+}
+
 const TRACK_DEFINITIONS = [
   {
     id: 'leftHand',
@@ -448,6 +480,17 @@ const ui = {
   effectMenuSlot: document.querySelector('#effect-menu-slot'),
   effectMenuStack: document.querySelector('.effect-menu-stack'),
   select: document.querySelector('#dance-select'),
+  addToSequence: document.querySelector('#add-to-sequence'),
+  sequenceTimelineToggle: document.querySelector('#sequence-timeline-toggle'),
+  sequenceTimelineToggleStatus: document.querySelector('#sequence-timeline-toggle-status'),
+  sequenceTimelinePanel: document.querySelector('#sequence-timeline-panel'),
+  sequenceTimelineClose: document.querySelector('#sequence-timeline-close'),
+  sequenceTrack: document.querySelector('#sequence-track'),
+  sequenceStatus: document.querySelector('#sequence-status'),
+  sequencePlay: document.querySelector('#sequence-play'),
+  sequenceClear: document.querySelector('#sequence-clear'),
+  sequenceDurationButtons: [...document.querySelectorAll('[data-sequence-duration]')],
+  sequenceEasingButtons: [...document.querySelectorAll('[data-sequence-easing]')],
   sceneWrap: document.querySelector('#scene-wrap'),
   threeCanvas: document.querySelector('#three-canvas'),
   loading: document.querySelector('#loading-state'),
@@ -523,6 +566,8 @@ const ui = {
   lineDisplayStatus: document.querySelector('#line-display-status'),
   bodyPointsToggle: document.querySelector('#body-points-toggle'),
   bodyPointsStatus: document.querySelector('#body-points-status'),
+  bodyCenteringToggle: document.querySelector('#body-centering-toggle'),
+  bodyCenteringStatus: document.querySelector('#body-centering-status'),
   floorLightButtons: [...document.querySelectorAll('[data-floor-light]')],
   traceSampleRateButtons: [...document.querySelectorAll('[data-trace-sample-rate]')],
   analysisPanel: document.querySelector('.analysis-panel'),
@@ -539,9 +584,25 @@ const state = {
   loadToken: 0,
   root: null,
   modelContainer: null,
+  modelMovementId: null,
   mixer: null,
   action: null,
   clip: null,
+  sequence: [],
+  sequenceTimelineOpen: false,
+  sequenceActive: false,
+  sequenceReady: false,
+  sequencePreparing: false,
+  sequenceLoadToken: 0,
+  sequenceActions: [],
+  sequenceIndex: 0,
+  sequenceTransition: null,
+  sequencePendingStartIndex: 0,
+  sequencePendingPreviewIndex: null,
+  sequencePendingProgress: null,
+  sequenceResumePlaying: null,
+  sequenceTransitionDuration: SEQUENCE_TRANSITION_DURATION,
+  sequenceTransitionEasing: 'ease',
   bones: new Map(),
   trackers: [],
   playing: true,
@@ -570,6 +631,7 @@ const state = {
   cameraOrbitDirection: 1,
   avatarOffsetX: 0,
   avatarOffsetY: 0,
+  bodyCenterLocked: true,
   activeExperiments: new Set(),
   visualizationMenuOpen: false,
   flowFieldEnabled: false,
@@ -722,6 +784,7 @@ dracoLoader.setDecoderConfig({ type: 'wasm' });
 const gltfLoader = new GLTFLoader();
 gltfLoader.setDRACOLoader(dracoLoader);
 gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+const sequenceClipCache = new Map();
 
 const clock = new THREE.Clock();
 const tempVector = new THREE.Vector3();
@@ -850,9 +913,15 @@ function clearCurrentModel() {
   }
   disposeObject(experimentalObjects);
   experimentalObjects.clear();
+  state.sequenceLoadToken += 1;
+  state.sequenceReady = false;
+  state.sequencePreparing = false;
+  state.sequenceActions = [];
+  state.sequenceTransition = null;
   state.mixer?.stopAllAction();
   state.root = null;
   state.modelContainer = null;
+  state.modelMovementId = null;
   state.mixer = null;
   state.action = null;
   state.clip = null;
@@ -890,15 +959,650 @@ function chooseClip(animations, modelNumber) {
 function getTrimmedClipStart(clip) {
   const sampledTimes = [];
   for (const track of clip.tracks) {
-    const limit = Math.min(3, track.times.length);
+    const limit = Math.min(24, track.times.length);
     for (let index = 0; index < limit; index += 1) sampledTimes.push(track.times[index]);
   }
   sampledTimes.sort((a, b) => a - b);
   const uniqueTimes = sampledTimes.filter(
     (time, index) => index === 0 || Math.abs(time - sampledTimes[index - 1]) > 0.0001
   );
-  const start = uniqueTimes[1] ?? uniqueTimes[0] ?? 0;
+  const firstTime = uniqueTimes[0] ?? 0;
+  const trimTarget = firstTime + INITIAL_POSE_TRIM_SECONDS;
+  const start = uniqueTimes.find((time) => time + 0.0001 >= trimTarget)
+    ?? uniqueTimes.at(-1)
+    ?? firstTime;
   return THREE.MathUtils.clamp(start, 0, Math.max(0, clip.duration - 0.001));
+}
+
+function escapeSequenceMarkup(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function getSequenceIds() {
+  return state.sequence.map((entry) => entry.movementId);
+}
+
+function getSequenceRuntime(index = state.sequenceIndex) {
+  return state.sequenceActions[index] ?? null;
+}
+
+function getSequenceTransitionDuration(fromIndex, toIndex) {
+  const from = getSequenceRuntime(fromIndex);
+  const to = getSequenceRuntime(toIndex);
+  const requestedDuration = state.sequence[fromIndex]?.transitionDuration
+    ?? state.sequenceTransitionDuration;
+  if (!from || !to) return requestedDuration;
+  return Math.max(0.08, Math.min(
+    requestedDuration,
+    from.playableDuration * 0.36,
+    to.playableDuration * 0.36
+  ));
+}
+
+function getSequenceBlendWeight(progress, easing = 'ease') {
+  const normalized = THREE.MathUtils.clamp(progress, 0, 1);
+  if (easing === 'linear') return normalized;
+  return normalized * normalized * (3 - 2 * normalized);
+}
+
+function getSequenceTransitionEasing(index) {
+  return state.sequence[index]?.transitionEasing === 'linear' ? 'linear' : 'ease';
+}
+
+function updateSequenceTransitionControls() {
+  ui.sequenceDurationButtons.forEach((button) => {
+    button.classList.toggle('active', Math.abs(Number(button.dataset.sequenceDuration) - state.sequenceTransitionDuration) < 0.001);
+  });
+  ui.sequenceEasingButtons.forEach((button) => {
+    button.classList.toggle('active', button.dataset.sequenceEasing === state.sequenceTransitionEasing);
+  });
+}
+
+function setSequenceTransitionDuration(value) {
+  const nextDuration = THREE.MathUtils.clamp(Number(value) || SEQUENCE_TRANSITION_DURATION, 0.2, 5);
+  if (state.sequenceTransition) {
+    const progress = state.sequenceTransition.duration
+      ? state.sequenceTransition.elapsed / state.sequenceTransition.duration
+      : 0;
+    state.sequenceTransitionDuration = nextDuration;
+    state.sequenceTransition.duration = getSequenceTransitionDuration(
+      state.sequenceTransition.fromIndex,
+      state.sequenceTransition.toIndex
+    );
+    state.sequenceTransition.elapsed = state.sequenceTransition.duration * progress;
+  } else {
+    state.sequenceTransitionDuration = nextDuration;
+  }
+  updateSequenceTransitionControls();
+  if (state.sequenceReady) {
+    ui.timeline.max = String(getSequenceTotalDuration());
+    ui.totalTime.textContent = formatTime(getSequenceTotalDuration());
+  }
+  renderSequenceTimeline();
+}
+
+function setSequenceTransitionEasing(value) {
+  state.sequenceTransitionEasing = value === 'linear' ? 'linear' : 'ease';
+  updateSequenceTransitionControls();
+}
+
+function getSequenceOffsets() {
+  const offsets = [];
+  let offset = 0;
+  for (let index = 0; index < state.sequenceActions.length; index += 1) {
+    offsets.push(offset);
+    if (index < state.sequenceActions.length - 1) {
+      offset += state.sequenceActions[index].playableDuration
+        - getSequenceTransitionDuration(index, index + 1);
+    }
+  }
+  return offsets;
+}
+
+function getSequenceTotalDuration() {
+  if (!state.sequenceActions.length) return 0;
+  const offsets = getSequenceOffsets();
+  return offsets.at(-1) + state.sequenceActions.at(-1).playableDuration;
+}
+
+function getSequenceElapsedTime() {
+  const runtime = getSequenceRuntime();
+  if (!runtime) return 0;
+  const offsets = getSequenceOffsets();
+  if (state.sequenceTransition) {
+    const transition = state.sequenceTransition;
+    const from = getSequenceRuntime(transition.fromIndex);
+    return (offsets[transition.fromIndex] ?? 0)
+      + from.playableDuration
+      - transition.duration
+      + transition.elapsed;
+  }
+  return (offsets[state.sequenceIndex] ?? 0)
+    + THREE.MathUtils.clamp(runtime.action.time - runtime.clipStart, 0, runtime.playableDuration);
+}
+
+function setSequenceTimelineOpen(open) {
+  state.sequenceTimelineOpen = Boolean(open) && !EMBEDDED_VIEW;
+  ui.sequenceTimelinePanel.hidden = !state.sequenceTimelineOpen;
+  ui.sequenceTimelineToggle.setAttribute('aria-expanded', String(state.sequenceTimelineOpen));
+  ui.sequenceTimelineToggleStatus.textContent = state.sequenceTimelineOpen ? 'HIDE' : 'SHOW';
+  document.body.classList.toggle('sequence-timeline-open', state.sequenceTimelineOpen);
+}
+
+function updateAddToSequenceAvailability() {
+  const movement = MOVEMENTS.find((candidate) => candidate.id === ui.select.value);
+  const available = movement?.source === 'indexed' && state.sequence.length < MAX_SEQUENCE_LENGTH;
+  ui.addToSequence.disabled = !available;
+  ui.addToSequence.title = available
+    ? `Add movement ${movement.modelNumber} to the sequence`
+    : state.sequence.length >= MAX_SEQUENCE_LENGTH
+      ? `Sequence limit reached (${MAX_SEQUENCE_LENGTH})`
+      : 'Only indexed movements 1–59 can be sequenced';
+}
+
+function renderSequenceTimeline() {
+  updateAddToSequenceAvailability();
+  ui.sequencePlay.disabled = state.sequence.length === 0 || state.sequencePreparing;
+  ui.sequencePlay.textContent = state.sequenceActive ? 'STOP SEQUENCE' : 'PLAY SEQUENCE';
+
+  if (state.sequencePreparing) {
+    ui.sequenceStatus.textContent = `LOADING ${state.sequence.length} MOVEMENT${state.sequence.length === 1 ? '' : 'S'}…`;
+  } else if (state.sequenceActive && state.sequence.length) {
+    const activeNumber = Math.min(state.sequenceIndex + 1, state.sequence.length);
+    ui.sequenceStatus.textContent = state.sequenceTransition?.preview
+      ? `PREVIEWING ${String(state.sequenceTransition.fromIndex + 1).padStart(2, '0')} → ${String(state.sequenceTransition.toIndex + 1).padStart(2, '0')}`
+      : `SEQUENCE ON · ${String(activeNumber).padStart(2, '0')} / ${String(state.sequence.length).padStart(2, '0')}`;
+  } else {
+    ui.sequenceStatus.textContent = state.sequence.length
+      ? `${state.sequence.length} MOVEMENT${state.sequence.length === 1 ? '' : 'S'} · INDIVIDUAL TRANSITION CONTROLS`
+      : 'EMPTY · ADD MOVEMENTS 1–59';
+  }
+
+  if (!state.sequence.length) {
+    ui.sequenceTrack.innerHTML = `
+      <button class="sequence-empty-add" type="button" data-sequence-action="add">
+        <span>＋</span>
+        <strong>ADD THE SELECTED MOVEMENT</strong>
+        <small>BUILD A LOOP FROM INDEXED POSES 1–59</small>
+      </button>`;
+    return;
+  }
+
+  const movementOptions = INDEXED_MOVEMENTS.map((movement) => (
+    `<option value="${movement.id}">${String(movement.modelNumber).padStart(2, '0')} · ${escapeSequenceMarkup(movement.english.trim())}</option>`
+  )).join('');
+
+  ui.sequenceTrack.innerHTML = state.sequence.map((entry, index) => {
+    const movement = getSequenceMovement(entry);
+    const active = state.sequenceActive && index === state.sequenceIndex;
+    const nextIndex = (index + 1) % state.sequence.length;
+    const transitionActive = state.sequenceTransition?.fromIndex === index;
+    const transitionDuration = entry.transitionDuration ?? SEQUENCE_TRANSITION_DURATION;
+    const transitionEasing = entry.transitionEasing === 'linear' ? 'linear' : 'ease';
+    return `
+      <article class="sequence-clip${active ? ' active' : ''}" data-sequence-index="${index}">
+        <div class="sequence-clip__toolbar">
+          <span>${String(index + 1).padStart(2, '0')}</span>
+          <button type="button" data-sequence-action="left" aria-label="Move sequence item ${index + 1} left" ${index === 0 ? 'disabled' : ''}>←</button>
+          <button type="button" data-sequence-action="right" aria-label="Move sequence item ${index + 1} right" ${index === state.sequence.length - 1 ? 'disabled' : ''}>→</button>
+          <button type="button" data-sequence-action="remove" aria-label="Remove sequence item ${index + 1}">×</button>
+        </div>
+        <button class="sequence-clip__preview" type="button" data-sequence-action="jump" aria-label="Jump to movement ${movement.modelNumber}">
+          <span>${String(movement.modelNumber).padStart(2, '0')}</span>
+          <strong>${escapeSequenceMarkup(movement.thai)}</strong>
+          <small>${escapeSequenceMarkup(movement.english.trim())}</small>
+        </button>
+        <label>
+          <span>EDIT MOVEMENT</span>
+          <select data-sequence-movement aria-label="Edit sequence item ${index + 1}">
+            ${movementOptions.replace(`value="${movement.id}"`, `value="${movement.id}" selected`)}
+          </select>
+        </label>
+      </article>
+      <article
+        class="sequence-transition${transitionActive ? ' active' : ''}${index === state.sequence.length - 1 ? ' sequence-transition--loop' : ''}"
+      >
+        <button
+          class="sequence-transition__preview"
+          type="button"
+          data-sequence-transition="${index}"
+          ${state.sequence.length < 2 ? 'disabled' : ''}
+          aria-label="Preview transition from sequence item ${index + 1} to ${nextIndex + 1}"
+        >
+          <span>→</span>
+          <strong>${index === state.sequence.length - 1 ? 'LOOP TO 01' : 'TRANSITION'}</strong>
+          <small>CLICK TO PREVIEW</small>
+        </button>
+        <label class="sequence-transition__speed">
+          <span>SPEED</span>
+          <select data-sequence-transition-duration="${index}" aria-label="Transition ${index + 1} speed">
+            <option value="0.4" ${Math.abs(transitionDuration - 0.4) < 0.001 ? 'selected' : ''}>FAST · 0.4S</option>
+            <option value="0.8" ${Math.abs(transitionDuration - 0.8) < 0.001 ? 'selected' : ''}>QUICK · 0.8S</option>
+            <option value="1.2" ${Math.abs(transitionDuration - 1.2) < 0.001 ? 'selected' : ''}>SMOOTH · 1.2S</option>
+            <option value="2.4" ${Math.abs(transitionDuration - 2.4) < 0.001 ? 'selected' : ''}>SLOW · 2.4S</option>
+          </select>
+        </label>
+        <div class="sequence-transition__curve" role="group" aria-label="Transition ${index + 1} interpolation">
+          <button class="${transitionEasing === 'linear' ? 'active' : ''}" type="button" data-sequence-transition-easing="linear" data-sequence-transition-index="${index}">LINEAR</button>
+          <button class="${transitionEasing === 'ease' ? 'active' : ''}" type="button" data-sequence-transition-easing="ease" data-sequence-transition-index="${index}">EASE</button>
+        </div>
+      </article>`;
+  }).join('') + `
+    <button class="sequence-track-add" type="button" data-sequence-action="add" ${state.sequence.length >= MAX_SEQUENCE_LENGTH ? 'disabled' : ''}>
+      <span>＋</span><strong>ADD SELECTED</strong>
+    </button>`;
+}
+
+function loadSequenceClipData(entry) {
+  const movement = getSequenceMovement(entry);
+  if (!movement) return Promise.reject(new Error('Sequence movement is unavailable.'));
+  if (sequenceClipCache.has(movement.id)) return sequenceClipCache.get(movement.id);
+
+  const request = new Promise((resolve, reject) => {
+    gltfLoader.load(
+      movement.url,
+      (gltf) => {
+        try {
+          const sourceClip = chooseClip(gltf.animations, movement.modelNumber);
+          if (!sourceClip) throw new Error(`Movement ${movement.id} has no animation clip.`);
+          const clip = sourceClip.clone();
+          clip.name = `sequence-source-${movement.id}`;
+          const clipStart = getTrimmedClipStart(clip);
+          resolve({ movement, clip, clipStart });
+        } catch (error) {
+          reject(error);
+        } finally {
+          disposeObject(gltf.scene);
+        }
+      },
+      undefined,
+      reject
+    );
+  }).catch((error) => {
+    sequenceClipCache.delete(movement.id);
+    throw error;
+  });
+
+  sequenceClipCache.set(movement.id, request);
+  return request;
+}
+
+function updateSequenceRuntimeSelection(runtime, index) {
+  if (!runtime) return;
+  state.sequenceIndex = index;
+  state.action = runtime.action;
+  state.clip = runtime.clip;
+  state.duration = runtime.clip.duration;
+  state.clipStart = runtime.clipStart;
+  state.lastClipTime = runtime.action.time;
+  const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === runtime.movement.id);
+  if (movementIndex >= 0) state.movementIndex = movementIndex;
+  ui.select.value = runtime.movement.id;
+  updateMovementInformation(runtime.movement);
+  updateAddToSequenceAvailability();
+}
+
+function setSequenceRuntime(index, localTime = 0, { preserveTrails = false } = {}) {
+  const runtime = getSequenceRuntime(index);
+  if (!runtime || !state.mixer) return;
+  state.mixer.stopAllAction();
+  state.sequenceTransition = null;
+  runtime.action.reset();
+  runtime.action.enabled = true;
+  runtime.action.setEffectiveTimeScale(1);
+  runtime.action.setEffectiveWeight(1);
+  runtime.action.setLoop(THREE.LoopOnce, 1);
+  runtime.action.clampWhenFinished = true;
+  runtime.action.play();
+  runtime.action.time = runtime.clipStart + THREE.MathUtils.clamp(localTime, 0, runtime.playableDuration);
+  state.mixer.update(0);
+  updateSequenceRuntimeSelection(runtime, index);
+  centerCharacter();
+  resetTrackerSamples({ preserveTrails });
+  updateMotionSignals(1 / 30, false, false);
+  renderSequenceTimeline();
+}
+
+async function initializeSequencePlayback() {
+  if (state.sequencePreparing || !state.sequenceActive || !state.sequence.length || !state.root || !state.mixer) return;
+  const token = ++state.sequenceLoadToken;
+  const resumePlaying = state.sequenceResumePlaying ?? state.playing;
+  setPlaying(false);
+  state.sequencePreparing = true;
+  state.sequenceReady = false;
+  state.sequenceResumePlaying = resumePlaying;
+  renderSequenceTimeline();
+
+  try {
+    const entries = [...state.sequence];
+    const sources = await Promise.all(entries.map(loadSequenceClipData));
+    if (token !== state.sequenceLoadToken || !state.sequenceActive) return;
+
+    state.mixer.stopAllAction();
+    state.sequenceActions = sources.map((source, index) => {
+      const clip = source.clip.clone();
+      clip.name = `sequence-${entries[index].uid}`;
+      const action = state.mixer.clipAction(clip);
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.enabled = true;
+      return {
+        entry: entries[index],
+        movement: source.movement,
+        clip,
+        clipStart: source.clipStart,
+        playableDuration: Math.max(0.001, clip.duration - source.clipStart),
+        action
+      };
+    });
+    state.sequencePreparing = false;
+    state.sequenceReady = true;
+
+    const startIndex = THREE.MathUtils.clamp(
+      Number(state.sequencePendingStartIndex) || 0,
+      0,
+      state.sequenceActions.length - 1
+    );
+    setSequenceRuntime(startIndex, 0);
+    ui.timeline.min = '0';
+    ui.timeline.max = String(getSequenceTotalDuration());
+    ui.timeline.value = String(getSequenceElapsedTime());
+    ui.totalTime.textContent = formatTime(getSequenceTotalDuration());
+
+    if (Number.isFinite(state.sequencePendingProgress)) {
+      const pendingProgress = state.sequencePendingProgress;
+      state.sequencePendingProgress = null;
+      seekSequenceToProgress(pendingProgress);
+    }
+
+    const previewIndex = state.sequencePendingPreviewIndex;
+    state.sequencePendingPreviewIndex = null;
+    if (Number.isInteger(previewIndex)) previewSequenceTransition(previewIndex);
+    else setPlaying(state.sequenceResumePlaying ?? true);
+    state.sequenceResumePlaying = null;
+    renderSequenceTimeline();
+  } catch (error) {
+    if (token !== state.sequenceLoadToken) return;
+    console.error(error);
+    state.sequencePreparing = false;
+    state.sequenceReady = false;
+    state.sequenceActive = false;
+    ui.sequenceStatus.textContent = 'SEQUENCE COULD NOT BE PREPARED';
+    setPlaying(false);
+    renderSequenceTimeline();
+  }
+}
+
+function startSequence({ startIndex = 0, previewIndex = null } = {}) {
+  if (!state.sequence.length) return;
+  if (state.sequenceResumePlaying === null) state.sequenceResumePlaying = state.playing;
+  state.sequenceActive = true;
+  state.sequencePendingStartIndex = startIndex;
+  state.sequencePendingPreviewIndex = previewIndex;
+  state.sequenceTransition = null;
+  if (!EMBEDDED_VIEW) setSequenceTimelineOpen(true);
+  renderSequenceTimeline();
+
+  const firstMovement = getSequenceMovement(state.sequence[0]);
+  if (!firstMovement) return;
+  if (state.modelMovementId !== firstMovement.id || !state.ready) {
+    const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === firstMovement.id);
+    if (movementIndex >= 0) {
+      setLoading('PREPARING SEQUENCE', `01 / ${String(state.sequence.length).padStart(2, '0')}`);
+      loadModel(movementIndex);
+    }
+    return;
+  }
+  void initializeSequencePlayback();
+}
+
+function stopSequence({ reloadModel = true } = {}) {
+  state.sequenceLoadToken += 1;
+  state.sequenceActive = false;
+  state.sequenceReady = false;
+  state.sequencePreparing = false;
+  state.sequenceTransition = null;
+  state.sequenceActions = [];
+  state.sequenceResumePlaying = null;
+  state.sequencePendingProgress = null;
+  renderSequenceTimeline();
+  if (!reloadModel || !state.ready) return;
+  const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === ui.select.value);
+  if (movementIndex >= 0) loadModel(movementIndex);
+}
+
+function applySequenceValue(value, active = state.sequenceActive) {
+  const nextEntries = parseSequenceEntries(value);
+  const wasActive = Boolean(active) && nextEntries.length > 0;
+  state.sequenceLoadToken += 1;
+  state.sequence = nextEntries;
+  state.sequenceActive = wasActive;
+  state.sequenceReady = false;
+  state.sequencePreparing = false;
+  state.sequenceActions = [];
+  state.sequenceTransition = null;
+  renderSequenceTimeline();
+  if (wasActive) startSequence();
+}
+
+function refreshSequenceAfterEdit(preferredIndex = 0) {
+  state.sequenceLoadToken += 1;
+  state.sequenceReady = false;
+  state.sequenceActions = [];
+  state.sequenceTransition = null;
+  renderSequenceTimeline();
+  if (state.sequenceActive && state.sequence.length) startSequence({ startIndex: preferredIndex });
+  else if (!state.sequence.length) stopSequence({ reloadModel: false });
+}
+
+function addSelectedMovementToSequence() {
+  const entry = createSequenceEntry(ui.select.value);
+  if (!entry || state.sequence.length >= MAX_SEQUENCE_LENGTH) return;
+  state.sequence.push(entry);
+  setSequenceTimelineOpen(true);
+  refreshSequenceAfterEdit(state.sequence.length - 1);
+}
+
+function removeSequenceEntry(index) {
+  if (!state.sequence[index]) return;
+  state.sequence.splice(index, 1);
+  refreshSequenceAfterEdit(Math.max(0, Math.min(index, state.sequence.length - 1)));
+}
+
+function moveSequenceEntry(index, direction) {
+  const targetIndex = index + direction;
+  if (!state.sequence[index] || !state.sequence[targetIndex]) return;
+  [state.sequence[index], state.sequence[targetIndex]] = [state.sequence[targetIndex], state.sequence[index]];
+  refreshSequenceAfterEdit(targetIndex);
+}
+
+function editSequenceEntry(index, movementId) {
+  if (!state.sequence[index] || !INDEXED_MOVEMENTS.some((movement) => movement.id === movementId)) return;
+  state.sequence[index].movementId = movementId;
+  refreshSequenceAfterEdit(index);
+}
+
+function setSequenceEntryTransitionDuration(index, value) {
+  const entry = state.sequence[index];
+  if (!entry) return;
+  entry.transitionDuration = THREE.MathUtils.clamp(Number(value) || SEQUENCE_TRANSITION_DURATION, 0.2, 5);
+  if (state.sequenceTransition?.fromIndex === index) {
+    const progress = state.sequenceTransition.duration
+      ? state.sequenceTransition.elapsed / state.sequenceTransition.duration
+      : 0;
+    state.sequenceTransition.duration = getSequenceTransitionDuration(index, state.sequenceTransition.toIndex);
+    state.sequenceTransition.elapsed = state.sequenceTransition.duration * progress;
+  }
+  if (state.sequenceReady) {
+    ui.timeline.max = String(getSequenceTotalDuration());
+    ui.totalTime.textContent = formatTime(getSequenceTotalDuration());
+  }
+  renderSequenceTimeline();
+}
+
+function setSequenceEntryTransitionEasing(index, value) {
+  const entry = state.sequence[index];
+  if (!entry) return;
+  entry.transitionEasing = value === 'linear' ? 'linear' : 'ease';
+  if (state.sequenceTransition?.fromIndex === index) {
+    state.sequenceTransition.easing = entry.transitionEasing;
+  }
+  renderSequenceTimeline();
+}
+
+function clearSequence() {
+  const wasActive = state.sequenceActive;
+  state.sequence = [];
+  state.sequenceLoadToken += 1;
+  state.sequenceActive = false;
+  state.sequenceReady = false;
+  state.sequencePreparing = false;
+  state.sequenceActions = [];
+  state.sequenceResumePlaying = null;
+  state.sequencePendingProgress = null;
+  state.sequenceTransition = null;
+  renderSequenceTimeline();
+  if (wasActive && state.ready) {
+    const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === ui.select.value);
+    if (movementIndex >= 0) loadModel(movementIndex);
+  }
+}
+
+function beginSequenceTransition(fromIndex, preview = false) {
+  if (state.sequenceActions.length < 2 || state.sequenceTransition) return false;
+  const toIndex = (fromIndex + 1) % state.sequenceActions.length;
+  const from = getSequenceRuntime(fromIndex);
+  const to = getSequenceRuntime(toIndex);
+  if (!from || !to) return false;
+  const duration = getSequenceTransitionDuration(fromIndex, toIndex);
+
+  to.action.reset();
+  to.action.enabled = true;
+  to.action.setEffectiveTimeScale(1);
+  to.action.setEffectiveWeight(0);
+  to.action.setLoop(THREE.LoopOnce, 1);
+  to.action.clampWhenFinished = true;
+  to.action.play();
+  to.action.time = to.clipStart;
+  from.action.enabled = true;
+  from.action.setEffectiveWeight(1);
+  state.sequenceTransition = {
+    fromIndex,
+    toIndex,
+    duration,
+    elapsed: 0,
+    easing: getSequenceTransitionEasing(fromIndex),
+    preview
+  };
+  renderSequenceTimeline();
+  return true;
+}
+
+function previewSequenceTransition(fromIndex) {
+  if (state.sequence.length < 2) return;
+  const normalizedIndex = THREE.MathUtils.clamp(Number(fromIndex) || 0, 0, state.sequence.length - 1);
+  if (!state.sequenceActive || !state.sequenceReady) {
+    state.sequenceResumePlaying = true;
+    startSequence({ startIndex: normalizedIndex, previewIndex: normalizedIndex });
+    return;
+  }
+  const from = getSequenceRuntime(normalizedIndex);
+  if (!from) return;
+  const toIndex = (normalizedIndex + 1) % state.sequenceActions.length;
+  const duration = getSequenceTransitionDuration(normalizedIndex, toIndex);
+  state.mixer.stopAllAction();
+  from.action.reset();
+  from.action.enabled = true;
+  from.action.setEffectiveWeight(1);
+  from.action.setLoop(THREE.LoopOnce, 1);
+  from.action.clampWhenFinished = true;
+  from.action.play();
+  from.action.time = Math.max(from.clipStart, from.clip.duration - duration);
+  state.mixer.update(0);
+  updateSequenceRuntimeSelection(from, normalizedIndex);
+  state.sequenceTransition = null;
+  beginSequenceTransition(normalizedIndex, true);
+  centerCharacter();
+  resetTrackerSamples({ preserveTrails: true });
+  setPlaying(true);
+}
+
+function jumpToSequenceClip(index) {
+  const normalizedIndex = THREE.MathUtils.clamp(Number(index) || 0, 0, Math.max(0, state.sequence.length - 1));
+  if (!state.sequenceActive || !state.sequenceReady) {
+    state.sequenceResumePlaying = false;
+    startSequence({ startIndex: normalizedIndex });
+    return;
+  }
+  setSequenceRuntime(normalizedIndex, 0, { preserveTrails: true });
+  setPlaying(false);
+}
+
+function seekSequenceToProgress(progress) {
+  if (!state.sequenceReady || !state.sequenceActions.length) return;
+  const normalizedProgress = THREE.MathUtils.clamp(Number(progress) || 0, 0, 1);
+  const totalDuration = getSequenceTotalDuration();
+  const requestedTime = totalDuration * normalizedProgress;
+  const offsets = getSequenceOffsets();
+  let index = 0;
+  for (let candidate = 1; candidate < offsets.length; candidate += 1) {
+    if (requestedTime >= offsets[candidate]) index = candidate;
+    else break;
+  }
+  const runtime = getSequenceRuntime(index);
+  setSequenceRuntime(index, Math.min(runtime.playableDuration, requestedTime - offsets[index]), { preserveTrails: true });
+}
+
+function advanceSequencePlayback(delta) {
+  if (state.sequenceTransition) {
+    const transition = state.sequenceTransition;
+    const from = getSequenceRuntime(transition.fromIndex);
+    const to = getSequenceRuntime(transition.toIndex);
+    transition.elapsed = Math.min(transition.duration, transition.elapsed + delta);
+    const blendWeight = getSequenceBlendWeight(
+      transition.duration ? transition.elapsed / transition.duration : 1,
+      transition.easing
+    );
+    from.action.setEffectiveWeight(1 - blendWeight);
+    to.action.setEffectiveWeight(blendWeight);
+    state.mixer.update(delta);
+    if (transition.elapsed + 0.0001 < transition.duration) return false;
+
+    from.action.stop();
+    to.action.enabled = true;
+    to.action.setEffectiveWeight(1);
+    updateSequenceRuntimeSelection(to, transition.toIndex);
+    state.sequenceTransition = null;
+    const looped = transition.toIndex === 0;
+    if (looped) resetTrackerSamples();
+    if (transition.preview) setPlaying(false);
+    renderSequenceTimeline();
+    return looped;
+  }
+
+  state.mixer.update(delta);
+  const runtime = getSequenceRuntime();
+  if (!runtime) return false;
+  if (state.sequenceActions.length === 1 && runtime.action.time >= runtime.clip.duration - 0.001) {
+    runtime.action.reset().play();
+    runtime.action.time = runtime.clipStart;
+    state.mixer.update(0);
+    state.lastClipTime = runtime.clipStart;
+    return true;
+  }
+
+  const nextIndex = (state.sequenceIndex + 1) % state.sequenceActions.length;
+  const transitionDuration = getSequenceTransitionDuration(state.sequenceIndex, nextIndex);
+  if (runtime.action.time >= runtime.clip.duration - transitionDuration) {
+    beginSequenceTransition(state.sequenceIndex, false);
+  }
+  state.lastClipTime = runtime.action.time;
+  return false;
 }
 
 function installEnergySurfaceShader(material) {
@@ -1649,6 +2353,7 @@ function getCurrentViewState(
     floorLight: state.floorLight,
     avatarOffsetX: state.avatarOffsetX,
     avatarOffsetY: state.avatarOffsetY,
+    bodyCenterLocked: state.bodyCenterLocked,
     cameraOrbit: state.cameraOrbit,
     cameraOrbitSpeed: state.cameraOrbitSpeed,
     cameraOrbitDirection: state.cameraOrbitDirection,
@@ -1663,6 +2368,13 @@ function getCurrentViewState(
     visualizationMenuOpen: state.visualizationMenuOpen,
     flowFieldEnabled: state.flowFieldEnabled,
     flowFieldMenuOpen: state.flowFieldMenuOpen,
+    sequence: getSequenceIds().join(','),
+    sequenceActive: state.sequenceActive,
+    sequenceTimelineOpen: state.sequenceTimelineOpen,
+    sequenceTransitionDuration: state.sequenceTransitionDuration,
+    sequenceTransitionEasing: state.sequenceTransitionEasing,
+    sequenceTransitionDurations: state.sequence.map((entry) => entry.transitionDuration).join(','),
+    sequenceTransitionEasings: state.sequence.map((entry) => entry.transitionEasing).join(','),
     flowFieldSpeed: state.flowFieldSpeed,
     flowFieldCount: state.flowFieldCount,
     flowFieldGradient: state.flowFieldGradient,
@@ -1690,9 +2402,7 @@ function syncShareableUrl() {
   if (EMBEDDED_VIEW || !state.ready) return;
   const url = new URL(window.location.href);
   const experiments = EXPERIMENT_KEYS.filter((key) => state.activeExperiments.has(key));
-  const currentTime = Math.max(0, (state.action?.time ?? state.clipStart) - state.clipStart);
-  const duration = Math.max(0, state.duration - state.clipStart);
-  const progress = duration ? THREE.MathUtils.clamp(currentTime / duration, 0, 1) : 0;
+  const { progress } = getPlaybackTiming();
   const movement = MOVEMENTS[state.movementIndex];
 
   if (movement) url.searchParams.set('movement', movement.id);
@@ -1753,6 +2463,7 @@ function applyViewState(view) {
   if (Number.isFinite(Number(view.avatarOffsetX)) && Number.isFinite(Number(view.avatarOffsetY))) {
     setAvatarPosition(Number(view.avatarOffsetX), Number(view.avatarOffsetY));
   }
+  if (typeof view.bodyCenterLocked === 'boolean') setBodyCenterLocked(view.bodyCenterLocked);
   if (Number.isFinite(Number(view.cameraOrbitSpeed))) {
     const speed = Number(view.cameraOrbitSpeed);
     setCameraOrbitSpeed(speed, ui.cameraSpeedButtons.find((button) => Number(button.dataset.cameraSpeed) === speed));
@@ -1788,6 +2499,45 @@ function applyViewState(view) {
   if (typeof view.cameraControlsOpen === 'boolean') setCameraControlsOpen(view.cameraControlsOpen);
   if (typeof view.lineControlsOpen === 'boolean') setLineControlsOpen(view.lineControlsOpen);
   if (typeof view.visualizationMenuOpen === 'boolean') setVisualizationMenu(view.visualizationMenuOpen);
+  if (Number.isFinite(Number(view.sequenceTransitionDuration))) {
+    setSequenceTransitionDuration(Number(view.sequenceTransitionDuration));
+  }
+  if (typeof view.sequenceTransitionEasing === 'string') {
+    setSequenceTransitionEasing(view.sequenceTransitionEasing);
+  }
+  if (typeof view.sequence === 'string') {
+    const nextSequenceIds = parseSequenceEntries(view.sequence).map((entry) => entry.movementId);
+    const nextDurations = String(view.sequenceTransitionDurations ?? '')
+      .split(',')
+      .map(Number);
+    const nextEasings = String(view.sequenceTransitionEasings ?? '').split(',');
+    const nextEntries = nextSequenceIds.map((movementId, index) => createSequenceEntry(movementId, {
+      duration: Number.isFinite(nextDurations[index]) && nextDurations[index] > 0
+        ? nextDurations[index]
+        : view.sequenceTransitionDuration,
+      easing: nextEasings[index] || view.sequenceTransitionEasing
+    })).filter(Boolean);
+    const currentDurations = state.sequence.map((entry) => entry.transitionDuration).join(',');
+    const currentEasings = state.sequence.map((entry) => entry.transitionEasing).join(',');
+    const sequenceChanged = nextSequenceIds.join(',') !== getSequenceIds().join(',')
+      || nextEntries.map((entry) => entry.transitionDuration).join(',') !== currentDurations
+      || nextEntries.map((entry) => entry.transitionEasing).join(',') !== currentEasings;
+    if (sequenceChanged) {
+      state.sequenceLoadToken += 1;
+      state.sequence = nextEntries;
+      state.sequenceReady = false;
+      state.sequencePreparing = false;
+      state.sequenceActions = [];
+      state.sequenceTransition = null;
+      renderSequenceTimeline();
+    }
+    if (view.sequenceActive && state.sequence.length && (sequenceChanged || !state.sequenceActive)) {
+      startSequence();
+    } else if (view.sequenceActive === false && state.sequenceActive) {
+      stopSequence({ reloadModel: !EMBEDDED_VIEW });
+    }
+  }
+  if (typeof view.sequenceTimelineOpen === 'boolean') setSequenceTimelineOpen(view.sequenceTimelineOpen);
   const flowFieldViewControls = {
     thickness: view.flowFieldThickness,
     opacity: view.flowFieldOpacity,
@@ -1830,11 +2580,12 @@ function persistFocusedGridState() {
     if (!Array.isArray(storedGridState?.cells) || !Number.isInteger(focusedIndex) || focusedIndex < 0 || focusedIndex >= 6) return;
 
     const experiments = EXPERIMENT_KEYS.filter((key) => state.activeExperiments.has(key));
-    const currentTime = Math.max(0, (state.action?.time ?? state.clipStart) - state.clipStart);
-    const duration = Math.max(0, state.duration - state.clipStart);
+    const { progress } = getPlaybackTiming();
     storedGridState.cells[focusedIndex] = {
       ...storedGridState.cells[focusedIndex],
-      movement: MOVEMENTS[state.movementIndex]?.id ?? storedGridState.cells[focusedIndex].movement,
+      movement: state.sequenceActive && state.sequence.length
+        ? state.sequence[0].movementId
+        : MOVEMENTS[state.movementIndex]?.id ?? storedGridState.cells[focusedIndex].movement,
       effect: getGridEffectValue(experiments),
       effects: experiments,
       view: getCurrentViewState(experiments)
@@ -1842,7 +2593,7 @@ function persistFocusedGridState() {
     storedGridState.transport = {
       playing: state.playing,
       speed: state.speed,
-      progress: duration ? currentTime / duration : 0
+      progress
     };
     window.sessionStorage.setItem(GRID_STATE_KEY, JSON.stringify(storedGridState));
   } catch {
@@ -2824,6 +3575,7 @@ function fitCamera() {
 }
 
 function centerCharacter() {
+  if (!state.bodyCenterLocked) return;
   const hips = state.bones.get('Hips');
   if (!state.root || !hips) return;
   state.root.updateMatrixWorld(true);
@@ -2857,6 +3609,7 @@ function prepareModel(gltf, movement) {
 
   state.root = root;
   state.modelContainer = modelContainer;
+  state.modelMovementId = movement.id;
   state.mixer = mixer;
   state.action = action;
   state.clip = clip;
@@ -2898,6 +3651,11 @@ function prepareModel(gltf, movement) {
   }
 
   hideLoading();
+
+  const firstSequenceMovement = getSequenceMovement(state.sequence[0]);
+  if (state.sequenceActive && firstSequenceMovement?.id === movement.id) {
+    void initializeSequencePlayback();
+  }
 
   if (EMBEDDED_VIEW) {
     window.parent.postMessage({
@@ -2966,8 +3724,28 @@ function formatTime(seconds) {
   return `${String(minutes).padStart(2, '0')}:${remainder.toFixed(2).padStart(5, '0')}`;
 }
 
+function getPlaybackTiming() {
+  if (state.sequenceActive && state.sequenceReady) {
+    const duration = getSequenceTotalDuration();
+    const currentTime = THREE.MathUtils.clamp(getSequenceElapsedTime(), 0, duration);
+    return {
+      currentTime,
+      duration,
+      progress: duration ? currentTime / duration : 0
+    };
+  }
+  const currentTime = Math.max(0, (state.action?.time ?? state.clipStart) - state.clipStart);
+  const duration = Math.max(0, state.duration - state.clipStart);
+  return {
+    currentTime,
+    duration,
+    progress: duration ? currentTime / duration : 0
+  };
+}
+
 function setPlaying(playing) {
   state.playing = playing;
+  if (state.sequencePreparing) state.sequenceResumePlaying = playing;
   ui.playButton.classList.toggle('paused', !playing);
   ui.playButton.setAttribute('aria-label', playing ? 'Pause animation' : 'Play animation');
 }
@@ -2981,6 +3759,15 @@ function setPlaybackSpeed(speed) {
 }
 
 function seekToProgress(progress) {
+  if (state.sequenceActive) {
+    const normalizedProgress = THREE.MathUtils.clamp(Number(progress) || 0, 0, 1);
+    if (!state.sequenceReady) {
+      state.sequencePendingProgress = normalizedProgress;
+      return;
+    }
+    seekSequenceToProgress(normalizedProgress);
+    return;
+  }
   if (!state.action || !state.mixer) return;
   const normalizedProgress = THREE.MathUtils.clamp(Number(progress) || 0, 0, 1);
   const playableDuration = Math.max(0, state.duration - state.clipStart);
@@ -3011,6 +3798,26 @@ function setCameraOrbitDirection(direction, activeButton) {
   state.cameraOrbitDirection = direction;
   controls.autoRotateSpeed = state.cameraOrbitSpeed * 2 * direction;
   ui.cameraDirectionButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
+}
+
+function setBodyCenterLocked(locked) {
+  const nextLocked = Boolean(locked);
+  const changed = state.bodyCenterLocked !== nextLocked;
+  state.bodyCenterLocked = nextLocked;
+  ui.bodyCenteringToggle.setAttribute('aria-pressed', String(nextLocked));
+  ui.bodyCenteringToggle.setAttribute(
+    'aria-label',
+    nextLocked ? 'Allow the avatar to move through space' : 'Fix the avatar in the center'
+  );
+  ui.bodyCenteringStatus.textContent = nextLocked ? 'FIXED CENTER' : 'MOVE IN SPACE';
+  if (nextLocked && state.root) {
+    centerCharacter();
+    state.root.updateMatrixWorld(true);
+  }
+  if (changed && state.ready) {
+    resetTrackerSamples({ preserveTrails: true });
+    updateMotionSignals(1 / 30, false, false);
+  }
 }
 
 function setAvatarPosition(nextX, nextY) {
@@ -3327,7 +4134,9 @@ function setGraphMode(mode, activeButton) {
 }
 
 function resetExperience() {
-  if (state.action) {
+  if (state.sequenceActive && state.sequenceReady) {
+    setSequenceRuntime(0, 0);
+  } else if (state.action) {
     state.action.reset().play();
     state.action.time = state.clipStart;
     state.mixer.update(0);
@@ -3497,13 +4306,15 @@ function resize() {
 
 function updateTransport() {
   if (EMBEDDED_VIEW) return;
-  const absoluteTime = state.action?.time ?? state.clipStart;
-  const time = Math.max(0, absoluteTime - state.clipStart);
-  const playableDuration = Math.max(0, state.duration - state.clipStart);
-  ui.currentTime.textContent = formatTime(time);
-  if (!ui.timeline.matches(':active')) ui.timeline.value = String(absoluteTime);
-  const progress = playableDuration ? (time / playableDuration) * 100 : 0;
-  ui.timeline.style.setProperty('--progress', `${progress}%`);
+  const timing = getPlaybackTiming();
+  ui.currentTime.textContent = formatTime(timing.currentTime);
+  ui.totalTime.textContent = formatTime(timing.duration);
+  if (!ui.timeline.matches(':active')) {
+    ui.timeline.value = state.sequenceActive && state.sequenceReady
+      ? String(timing.currentTime)
+      : String(state.action?.time ?? state.clipStart);
+  }
+  ui.timeline.style.setProperty('--progress', `${timing.progress * 100}%`);
 }
 
 function notifyEmbeddedTransport(delta) {
@@ -3512,14 +4323,13 @@ function notifyEmbeddedTransport(delta) {
   if (state.embeddedTransportElapsed < 0.1) return;
   state.embeddedTransportElapsed = 0;
 
-  const currentTime = Math.max(0, (state.action?.time ?? state.clipStart) - state.clipStart);
-  const duration = Math.max(0, state.duration - state.clipStart);
+  const { currentTime, duration, progress } = getPlaybackTiming();
   window.parent.postMessage({
     source: 'cyber-subin-avatar',
     type: 'transport',
     currentTime,
     duration,
-    progress: duration ? currentTime / duration : 0,
+    progress,
     playing: state.playing,
     speed: state.speed
   }, window.location.origin);
@@ -3529,18 +4339,23 @@ function animate() {
   const rawDelta = Math.min(clock.getDelta(), 0.08);
 
   if (state.ready && state.mixer && state.action && state.playing) {
-    state.mixer.update(rawDelta * state.speed);
-    const clipTime = state.action.time;
-    const looped = clipTime + 0.03 < state.lastClipTime;
-    if (looped) {
-      state.action.time = state.clipStart;
-      state.mixer.update(0);
-      state.lastClipTime = state.clipStart;
+    let looped = false;
+    if (state.sequenceActive && state.sequenceReady) {
+      looped = advanceSequencePlayback(rawDelta * state.speed);
     } else {
-      state.lastClipTime = clipTime;
+      state.mixer.update(rawDelta * state.speed);
+      const clipTime = state.action.time;
+      looped = clipTime + 0.03 < state.lastClipTime;
+      if (looped) {
+        state.action.time = state.clipStart;
+        state.mixer.update(0);
+        state.lastClipTime = state.clipStart;
+      } else {
+        state.lastClipTime = clipTime;
+      }
     }
     centerCharacter();
-    if (looped) resetTrackerSamples();
+    if (looped && !(state.sequenceActive && state.sequenceReady)) resetTrackerSamples();
 
     if (!EMBEDDED_VIEW) state.sampleElapsed += rawDelta;
     const trailElapsedBeforeFrame = state.trailElapsed;
@@ -3582,7 +4397,65 @@ function animate() {
 
 ui.select.addEventListener('change', () => {
   const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === ui.select.value);
-  if (movementIndex >= 0) loadModel(movementIndex);
+  updateAddToSequenceAvailability();
+  if (movementIndex >= 0) {
+    if (state.sequenceActive) stopSequence({ reloadModel: false });
+    loadModel(movementIndex);
+  }
+});
+ui.addToSequence.addEventListener('click', addSelectedMovementToSequence);
+ui.sequenceTimelineToggle.addEventListener('click', () => setSequenceTimelineOpen(!state.sequenceTimelineOpen));
+ui.sequenceTimelineClose.addEventListener('click', () => setSequenceTimelineOpen(false));
+ui.sequencePlay.addEventListener('click', () => {
+  if (state.sequenceActive) stopSequence();
+  else {
+    state.sequenceResumePlaying = true;
+    startSequence();
+  }
+});
+ui.sequenceClear.addEventListener('click', clearSequence);
+for (const button of ui.sequenceDurationButtons) {
+  button.addEventListener('click', () => setSequenceTransitionDuration(button.dataset.sequenceDuration));
+}
+for (const button of ui.sequenceEasingButtons) {
+  button.addEventListener('click', () => setSequenceTransitionEasing(button.dataset.sequenceEasing));
+}
+ui.sequenceTrack.addEventListener('click', (event) => {
+  const easingButton = event.target.closest('[data-sequence-transition-easing]');
+  if (easingButton) {
+    setSequenceEntryTransitionEasing(
+      Number(easingButton.dataset.sequenceTransitionIndex),
+      easingButton.dataset.sequenceTransitionEasing
+    );
+    return;
+  }
+  const transitionButton = event.target.closest('[data-sequence-transition]');
+  if (transitionButton) {
+    previewSequenceTransition(Number(transitionButton.dataset.sequenceTransition));
+    return;
+  }
+  const actionButton = event.target.closest('[data-sequence-action]');
+  if (!actionButton) return;
+  const index = Number(actionButton.closest('[data-sequence-index]')?.dataset.sequenceIndex);
+  if (actionButton.dataset.sequenceAction === 'add') addSelectedMovementToSequence();
+  if (actionButton.dataset.sequenceAction === 'remove') removeSequenceEntry(index);
+  if (actionButton.dataset.sequenceAction === 'left') moveSequenceEntry(index, -1);
+  if (actionButton.dataset.sequenceAction === 'right') moveSequenceEntry(index, 1);
+  if (actionButton.dataset.sequenceAction === 'jump') jumpToSequenceClip(index);
+});
+ui.sequenceTrack.addEventListener('change', (event) => {
+  const transitionDuration = event.target.closest('[data-sequence-transition-duration]');
+  if (transitionDuration) {
+    setSequenceEntryTransitionDuration(
+      Number(transitionDuration.dataset.sequenceTransitionDuration),
+      transitionDuration.value
+    );
+    return;
+  }
+  const select = event.target.closest('[data-sequence-movement]');
+  if (!select) return;
+  const index = Number(select.closest('[data-sequence-index]')?.dataset.sequenceIndex);
+  editSequenceEntry(index, select.value);
 });
 ui.playButton.addEventListener('click', () => setPlaying(!state.playing));
 ui.resetButton.addEventListener('click', resetExperience);
@@ -3603,6 +4476,11 @@ ui.flowFieldResetButton.addEventListener('click', resetFlowFieldParticles);
 
 ui.timeline.addEventListener('input', () => {
   if (!state.action || !state.mixer) return;
+  if (state.sequenceActive) {
+    const totalDuration = getSequenceTotalDuration();
+    seekSequenceToProgress(totalDuration ? Number(ui.timeline.value) / totalDuration : 0);
+    return;
+  }
   state.action.time = Number(ui.timeline.value);
   state.mixer.update(0);
   state.lastClipTime = state.action.time;
@@ -3699,6 +4577,7 @@ for (const button of ui.traceVisibilityButtons) {
 
 ui.lineDisplayToggle.addEventListener('click', () => setTraceVisibility(!state.traceVisible));
 ui.bodyPointsToggle.addEventListener('click', () => setBodyPointsVisibility(!state.bodyPointsVisible));
+ui.bodyCenteringToggle.addEventListener('click', () => setBodyCenterLocked(!state.bodyCenterLocked));
 
 for (const button of ui.traceDotButtons) {
   button.addEventListener('click', () => setTraceDots(button.dataset.traceDots === 'true', button));
@@ -3820,8 +4699,10 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault();
     setPlaying(!state.playing);
   } else if (event.key === 'ArrowRight') {
+    if (state.sequenceActive) stopSequence({ reloadModel: false });
     loadModel((state.movementIndex + 1) % MOVEMENTS.length);
   } else if (event.key === 'ArrowLeft') {
+    if (state.sequenceActive) stopSequence({ reloadModel: false });
     loadModel((state.movementIndex - 1 + MOVEMENTS.length) % MOVEMENTS.length);
   } else if (event.key.toLowerCase() === 'r') {
     resetExperience();
@@ -3872,6 +4753,9 @@ setFlowFieldEnabled(false);
 setFlowFieldMenu(false);
 setTraceVisibility(false);
 setBodyPointsVisibility(false);
+setBodyCenterLocked(true);
+renderSequenceTimeline();
+setSequenceTimelineOpen(false);
 setAnalysisWidth(390);
 setAnalysisVisibility(true);
 fitCamera();

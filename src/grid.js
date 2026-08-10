@@ -169,6 +169,30 @@ function sendAll(action, value) {
   for (const cell of cells) sendCommand(cell, action, value);
 }
 
+function hasSequence(viewState) {
+  return typeof viewState?.sequence === 'string'
+    && viewState.sequence.split(',').some((movementId) => INDEXED_MOVEMENTS.some((movement) => movement.id === movementId));
+}
+
+function clearSequenceFromView(viewState) {
+  const nextView = structuredClone(viewState ?? {});
+  nextView.sequence = '';
+  nextView.sequenceActive = false;
+  nextView.sequenceTimelineOpen = false;
+  nextView.sequenceTransitionDurations = '';
+  nextView.sequenceTransitionEasings = '';
+  return nextView;
+}
+
+function updateCellSequenceButton(cell) {
+  if (!cell?.applySequenceButton) return;
+  const available = hasSequence(cell.viewState) && cell.card.classList.contains('ready');
+  cell.applySequenceButton.disabled = !available;
+  cell.applySequenceButton.title = available
+    ? 'Apply this read-only movement sequence to all six avatars'
+    : 'Create a sequence in Single View first';
+}
+
 function setAllPlaying(playing) {
   transportState.playing = playing;
   ui.playAll.textContent = playing ? 'PAUSE ALL' : 'PLAY ALL';
@@ -319,6 +343,14 @@ const cells = Array.from({ length: 6 }, (_, index) => {
   applyStyleButton.title = 'Apply this visual style to all six avatars';
   applyStyleButton.textContent = 'STYLE ×6';
 
+  const applySequenceButton = document.createElement('button');
+  applySequenceButton.className = 'avatar-card__apply-sequence';
+  applySequenceButton.type = 'button';
+  applySequenceButton.disabled = true;
+  applySequenceButton.setAttribute('aria-label', `Apply cell ${index + 1} movement sequence to all six avatars`);
+  applySequenceButton.title = 'Create a sequence in Single View first';
+  applySequenceButton.textContent = 'SEQ ×6';
+
   const openButton = document.createElement('button');
   openButton.className = 'avatar-card__open';
   openButton.type = 'button';
@@ -326,7 +358,7 @@ const cells = Array.from({ length: 6 }, (_, index) => {
   openButton.title = 'Open in single view';
   openButton.textContent = '↗';
 
-  header.append(indexLabel, avatarLabel, effectLabel, stateLabel, applyStyleButton, openButton);
+  header.append(indexLabel, avatarLabel, effectLabel, stateLabel, applyStyleButton, applySequenceButton, openButton);
 
   const iframe = document.createElement('iframe');
   iframe.className = 'avatar-frame';
@@ -349,6 +381,7 @@ const cells = Array.from({ length: 6 }, (_, index) => {
     effectSelect,
     stateLabel,
     applyStyleButton,
+    applySequenceButton,
     openButton,
     viewState: cellViewState
   };
@@ -357,6 +390,8 @@ const cells = Array.from({ length: 6 }, (_, index) => {
     cell.viewState = structuredClone(
       cell.viewState ?? { experiments: experimentsForEffect(effectSelect.value) }
     );
+    cell.viewState = clearSequenceFromView(cell.viewState);
+    updateCellSequenceButton(cell);
     card.classList.remove('ready');
     stateLabel.textContent = 'LOADING';
     sendCommand(cell, 'movement', avatarSelect.value);
@@ -370,6 +405,7 @@ const cells = Array.from({ length: 6 }, (_, index) => {
     sendCommand(cell, 'effect', effectSelect.value);
   });
   applyStyleButton.addEventListener('click', () => applyCellStyleToAll(index));
+  applySequenceButton.addEventListener('click', () => applyCellSequenceToAll(index));
   openButton.addEventListener('click', () => openCellInSingleView(index));
 
   return cell;
@@ -397,7 +433,7 @@ function randomizeIndexedMovements() {
   prepareSynchronizedReload();
   cells.forEach((cell, index) => {
     const movement = randomizedIds[index];
-    cell.viewState = structuredClone(
+    cell.viewState = clearSequenceFromView(
       cell.viewState ?? { experiments: experimentsForEffect(cell.effectSelect.value) }
     );
     cell.avatarSelect.value = movement;
@@ -427,7 +463,17 @@ function applyCellStyleToAll(sourceIndex) {
     return;
   }
 
-  const { experiments: _sourceExperiments, ...sourceStyle } = sourceView;
+  const {
+    experiments: _sourceExperiments,
+    sequence: _sourceSequence,
+    sequenceActive: _sourceSequenceActive,
+    sequenceTimelineOpen: _sourceSequenceTimelineOpen,
+    sequenceTransitionDuration: _sourceSequenceTransitionDuration,
+    sequenceTransitionEasing: _sourceSequenceTransitionEasing,
+    sequenceTransitionDurations: _sourceSequenceTransitionDurations,
+    sequenceTransitionEasings: _sourceSequenceTransitionEasings,
+    ...sourceStyle
+  } = sourceView;
   cells.forEach((cell) => {
     const experiments = cell.viewState?.experiments ?? experimentsForEffect(cell.effectSelect.value);
     cell.viewState = {
@@ -446,8 +492,51 @@ function applyCellStyleToAll(sourceIndex) {
   }, 900);
 }
 
+function applyCellSequenceToAll(sourceIndex) {
+  const sourceCell = cells[sourceIndex];
+  const sourceSequence = sourceCell?.viewState?.sequence;
+  if (!hasSequence(sourceCell?.viewState)) {
+    openCellInSingleView(sourceIndex);
+    return;
+  }
+
+  const firstMovement = sourceSequence.split(',').find((movementId) => (
+    INDEXED_MOVEMENTS.some((movement) => movement.id === movementId)
+  ));
+  cells.forEach((cell) => {
+    cell.viewState = {
+      ...(cell.viewState ?? {}),
+      sequence: sourceSequence,
+      sequenceActive: true,
+      sequenceTimelineOpen: false,
+      sequenceTransitionDuration: sourceCell.viewState.sequenceTransitionDuration,
+      sequenceTransitionEasing: sourceCell.viewState.sequenceTransitionEasing,
+      sequenceTransitionDurations: sourceCell.viewState.sequenceTransitionDurations,
+      sequenceTransitionEasings: sourceCell.viewState.sequenceTransitionEasings
+    };
+    if (firstMovement) cell.avatarSelect.value = firstMovement;
+    sendCommand(cell, 'viewState', cell.viewState);
+    updateCellSequenceButton(cell);
+  });
+  if (firstMovement) ui.globalAvatar.value = firstMovement;
+  saveGridState();
+  window.setTimeout(() => {
+    sendAll('speed', transportState.speed);
+    sendAll('seek', transportState.progress);
+    sendAll('playing', transportState.playing);
+  }, 650);
+
+  sourceCell.applySequenceButton.classList.add('applied');
+  sourceCell.applySequenceButton.textContent = 'APPLIED';
+  window.setTimeout(() => {
+    sourceCell.applySequenceButton.classList.remove('applied');
+    sourceCell.applySequenceButton.textContent = 'SEQ ×6';
+  }, 900);
+}
+
 function applyMasterSettingsToAll() {
   applyCellStyleToAll(0);
+  if (hasSequence(cells[0]?.viewState)) applyCellSequenceToAll(0);
 }
 
 function resetAllGridSettings() {
@@ -509,7 +598,7 @@ ui.speedButtons.forEach((button) => {
 ui.applyAvatarAll.addEventListener('click', () => {
   prepareSynchronizedReload();
   for (const [index, cell] of cells.entries()) {
-    const preservedViewState = structuredClone(
+    const preservedViewState = clearSequenceFromView(
       cell.viewState ?? { experiments: experimentsForEffect(cell.effectSelect.value) }
     );
     cell.avatarSelect.value = ui.globalAvatar.value;
@@ -605,6 +694,7 @@ window.addEventListener('message', (event) => {
     cell.viewState = structuredClone(event.data.viewState);
   }
   if (cell.viewState) sendCommand(cell, 'viewState', cell.viewState);
+  updateCellSequenceButton(cell);
 
   if (synchronizationPending && cells.every((candidate) => candidate.card.classList.contains('ready'))) {
     synchronizationPending = false;
