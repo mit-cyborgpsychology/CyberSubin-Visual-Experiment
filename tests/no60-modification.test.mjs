@@ -174,44 +174,298 @@ function testDeterministicRegionalApplications() {
   assertNear(body.LeftUpLeg.quaternion.angleTo(new THREE.Quaternion()), 0, 0.001);
 }
 
-function runSynchronicExtreme(value) {
+function testCircularTravelSmoothsReversalsAndBoundaries() {
   const { root, bones } = createRig();
   const runtime = createNo60ModificationRuntime(root);
   const values = createDefaultNo60ModificationValues();
-  values.sync.arms = value;
-  const frameCount = 42;
-  const radiansPerFrame = 0.03;
+  values.curves.leftArm = 200;
+  const delta = 1 / 60;
+  const sourceAxis = new THREE.Vector3(1, 0, 0);
+  let sourceAngle = 0;
+  let previousOutput = bones.LeftArm.quaternion.clone();
+  let maximumContinuousStep = 0;
+  let curveBeforeBoundary = null;
+  let curveAfterBoundary = null;
 
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    const source = angleAroundX(frame * radiansPerFrame);
-    bones.LeftArm.quaternion.copy(source);
-    bones.RightArm.quaternion.copy(source);
-    applyNo60Modifications({ runtime, values, delta: 1 / 60 });
+  for (let frame = 0; frame < 150; frame += 1) {
+    const direction = frame < 72 ? 1 : -1;
+    sourceAngle += frame === 105 ? 2.15 : direction * 0.045;
+    sourceAxis.set(
+      1,
+      Math.sin(frame * 0.07) * 0.18,
+      Math.cos(frame * 0.053) * 0.12
+    ).normalize();
+    bones.LeftArm.quaternion.setFromAxisAngle(sourceAxis, sourceAngle);
+    if (frame === 105) {
+      const entry = runtime.entries.find(({ name }) => name === 'LeftArm');
+      curveBeforeBoundary = entry.curveRotation.clone();
+    }
+    applyNo60Modifications({ runtime, values, delta });
+    const outputStep = previousOutput.angleTo(bones.LeftArm.quaternion);
+    if (frame > 8 && frame !== 105) maximumContinuousStep = Math.max(maximumContinuousStep, outputStep);
+    if (frame === 105) {
+      const entry = runtime.entries.find(({ name }) => name === 'LeftArm');
+      curveAfterBoundary = entry.curveRotation.clone();
+    }
+    previousOutput.copy(bones.LeftArm.quaternion);
   }
 
-  const current = angleAroundX((frameCount - 1) * radiansPerFrame);
+  const leftArm = runtime.entries.find(({ name }) => name === 'LeftArm');
+  assert.ok(leftArm.curveAxisReady, 'A coherent curved path should retain a filtered axis');
+  assert.ok(
+    maximumContinuousStep < 0.55,
+    `Curved motion should not create a large frame-to-frame rotation (${maximumContinuousStep})`
+  );
+  assert.ok(
+    curveBeforeBoundary.angleTo(new THREE.Quaternion()) > 0.15,
+    'Higher curvature should accumulate visible circular momentum'
+  );
+  assert.ok(
+    curveBeforeBoundary.angleTo(curveAfterBoundary) < 0.12,
+    'A seek or loop-sized source jump should not clear the accumulated curve'
+  );
+}
+
+function testCircularTravelPreservesSkeletonStructure() {
+  const { root, bones } = createRig();
+  const runtime = createNo60ModificationRuntime(root);
+  const values = createDefaultNo60ModificationValues();
+  values.curves.whole = 200;
+  const curveRoots = new Set(['LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg']);
+  const originalPositions = Object.fromEntries(
+    Object.entries(bones).map(([name, bone]) => [name, bone.position.clone()])
+  );
+  const originalScales = Object.fromEntries(
+    Object.entries(bones).map(([name, bone]) => [name, bone.scale.clone()])
+  );
+  const previousOutputs = Object.fromEntries(
+    [...curveRoots].map((name) => [name, bones[name].quaternion.clone()])
+  );
+  let maximumAddedRotation = 0;
+  let maximumContinuousStep = 0;
+  let maximumSecondaryComponent = 0;
+
+  for (let frame = 0; frame < 300; frame += 1) {
+    const sourceAngle = Math.sin(frame * 0.052) * 0.92;
+    const sources = {};
+    for (const [index, [name, bone]] of Object.entries(bones).entries()) {
+      const source = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          sourceAngle * (0.72 + index * 0.025),
+          Math.sin(frame * 0.031 + index * 0.2) * 0.08,
+          0,
+          'XYZ'
+        )
+      );
+      bone.quaternion.copy(source);
+      sources[name] = source;
+    }
+    applyNo60Modifications({ runtime, values, delta: 1 / 60 });
+
+    for (const [name, bone] of Object.entries(bones)) {
+      assert.ok(
+        bone.position.equals(originalPositions[name]),
+        `${name} position must not be changed by Circle + Curve`
+      );
+      assert.ok(
+        bone.scale.equals(originalScales[name]),
+        `${name} scale must not be changed by Circle + Curve`
+      );
+      if (!curveRoots.has(name)) {
+        assertNear(
+          bone.quaternion.angleTo(sources[name]),
+          0,
+          0.0001,
+          `${name} local rotation should remain on the source animation`
+        );
+        continue;
+      }
+      maximumAddedRotation = Math.max(
+        maximumAddedRotation,
+        bone.quaternion.angleTo(sources[name])
+      );
+      if (frame > 30) {
+        maximumContinuousStep = Math.max(
+          maximumContinuousStep,
+          previousOutputs[name].angleTo(bone.quaternion)
+        );
+      }
+      previousOutputs[name].copy(bone.quaternion);
+    }
+
+    const leftArm = runtime.entries.find(({ name }) => name === 'LeftArm');
+    maximumSecondaryComponent = Math.max(
+      maximumSecondaryComponent,
+      Math.abs(leftArm.curveRotation.y),
+      Math.abs(leftArm.curveRotation.z)
+    );
+  }
+
+  assert.ok(
+    maximumAddedRotation < 0.55,
+    `Circular travel must remain bounded instead of twisting the limb (${maximumAddedRotation})`
+  );
+  assert.ok(
+    maximumContinuousStep < 0.18,
+    `Circular travel should stay smooth through reversals (${maximumContinuousStep})`
+  );
+  assert.ok(
+    maximumSecondaryComponent > 0.04,
+    'The bounded modifier should use a second axis to create a genuinely round path'
+  );
+}
+
+function measureCircularResponse(value) {
+  const { root, bones } = createRig();
+  const runtime = createNo60ModificationRuntime(root);
+  const values = createDefaultNo60ModificationValues();
+  values.curves.leftArm = value;
+  let maximumAmplitude = 0;
+  let accumulatedPhaseTravel = 0;
+  let previousPhase = 0;
+
+  for (let frame = 0; frame < 300; frame += 1) {
+    bones.LeftArm.quaternion.copy(angleAroundX(Math.sin(frame * 0.052) * 0.92));
+    applyNo60Modifications({ runtime, values, delta: 1 / 60 });
+    const entry = runtime.entries.find(({ name }) => name === 'LeftArm');
+    if (frame > 60) {
+      maximumAmplitude = Math.max(maximumAmplitude, entry.curveOrbitAmplitude);
+      accumulatedPhaseTravel += THREE.MathUtils.euclideanModulo(
+        entry.curvePhase - previousPhase,
+        Math.PI * 2
+      );
+    }
+    previousPhase = entry.curvePhase;
+  }
+  return { maximumAmplitude, accumulatedPhaseTravel };
+}
+
+function testCircularTravelHasPerceptuallyProgressiveStrength() {
+  const subtle = measureCircularResponse(109);
+  const medium = measureCircularResponse(150);
+  const maximum = measureCircularResponse(200);
+
+  assert.ok(
+    subtle.maximumAmplitude > 0.07,
+    `109% should already create a visible circular radius (${subtle.maximumAmplitude})`
+  );
+  assert.ok(
+    medium.maximumAmplitude > subtle.maximumAmplitude * 1.35,
+    '150% should be clearly more circular than 109%'
+  );
+  assert.ok(
+    maximum.maximumAmplitude > medium.maximumAmplitude * 1.18,
+    '200% should be clearly more circular than 150%'
+  );
+  assert.ok(
+    maximum.accumulatedPhaseTravel > subtle.accumulatedPhaseTravel * 1.25,
+    'Higher values should also complete circular travel faster'
+  );
+}
+
+function runSynchronicExtreme(value) {
+  const { root, bones } = createRig();
+  const clipDuration = 2;
+  const times = Array.from({ length: 17 }, (_, index) => index * clipDuration / 16);
+  const quaternionValues = times.flatMap((time) => (
+    angleAroundX(Math.sin(time / clipDuration * Math.PI * 2) * 0.82).toArray()
+  ));
+  const tracks = Object.keys(bones).map(
+    (name) => new THREE.QuaternionKeyframeTrack(
+      `${name}.quaternion`,
+      times,
+      quaternionValues
+    )
+  );
+  const clip = new THREE.AnimationClip('smooth-synchronic-loop', clipDuration, tracks);
+  const sourceInterpolant = tracks[0].createInterpolant();
+  const runtime = createNo60ModificationRuntime(root, clip, 0);
+  const values = createDefaultNo60ModificationValues();
+  values.sync.whole = value;
+  const frameCount = 360;
+  const delta = 1 / 60;
+  const trackedNames = ['Spine', 'LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg'];
+  const previous = Object.fromEntries(
+    trackedNames.map((name) => [name, bones[name].quaternion.clone()])
+  );
+  const maximumSteps = Object.fromEntries(trackedNames.map((name) => [name, 0]));
+  let settledOffsets = null;
+
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const actionTime = (frame * delta) % clipDuration;
+    const sample = sourceInterpolant.evaluate(actionTime);
+    const source = new THREE.Quaternion(sample[0], sample[1], sample[2], sample[3]).normalize();
+    for (const bone of Object.values(bones)) bone.quaternion.copy(source);
+    applyNo60Modifications({ runtime, values, delta, actionTime });
+
+    for (const name of trackedNames) {
+      if (frame > 180) {
+        maximumSteps[name] = Math.max(
+          maximumSteps[name],
+          previous[name].angleTo(bones[name].quaternion)
+        );
+      }
+      previous[name].copy(bones[name].quaternion);
+    }
+    if (frame === 240) {
+      settledOffsets = Object.fromEntries(
+        runtime.entries.map((entry) => [entry.name, entry.syncPhaseOffset])
+      );
+    }
+  }
+
+  const offsets = Object.fromEntries(
+    runtime.entries.map((entry) => [entry.name, entry.syncPhaseOffset])
+  );
   return {
-    leftLag: bones.LeftArm.quaternion.angleTo(current),
-    rightLag: bones.RightArm.quaternion.angleTo(current)
+    offsets,
+    settledOffsets,
+    maximumSteps
   };
 }
 
-function testSynchronicScaleIsBipolar() {
-  const leftBehind = runSynchronicExtreme(0);
+function testSynchronicScaleUsesSmoothLoopingPhaseOffsets() {
+  const asynchronous = runSynchronicExtreme(0);
   const neutral = runSynchronicExtreme(100);
   const rightBehind = runSynchronicExtreme(200);
 
-  assert.ok(leftBehind.leftLag > 0.7, '0% should place the left-side limbs behind');
-  assertNear(leftBehind.rightLag, 0, 0.001, '0% should leave the right-side phase current');
-  assertNear(neutral.leftLag, 0, 0.001, '100% should preserve the left-side phase');
-  assertNear(neutral.rightLag, 0, 0.001, '100% should preserve the right-side phase');
-  assertNear(rightBehind.leftLag, 0, 0.001, '200% should leave the left-side phase current');
-  assert.ok(rightBehind.rightLag > 0.7, '200% should place the right-side limbs behind');
-  assertNear(
-    leftBehind.leftLag,
-    rightBehind.rightLag,
-    0.001,
-    '0% and 200% should create equal phase separation in opposite directions'
+  const asynchronousOffsets = [
+    asynchronous.offsets.Spine,
+    asynchronous.offsets.LeftArm,
+    asynchronous.offsets.RightArm,
+    asynchronous.offsets.LeftUpLeg,
+    asynchronous.offsets.RightUpLeg
+  ];
+  assert.ok(
+    asynchronousOffsets.every((offset) => offset > 0.1),
+    `0% should give every major body region a looping phase offset (${asynchronousOffsets.join(', ')})`
+  );
+  assert.ok(
+    new Set(asynchronousOffsets.map((offset) => offset.toFixed(2))).size === 5,
+    `0% should give the five major regions different start times (${asynchronousOffsets.join(', ')})`
+  );
+  for (const name of ['Spine', 'LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg']) {
+    assert.ok(
+      asynchronous.maximumSteps[name] < 0.12,
+      `The ${name} track should run smoothly through its independent loop (${asynchronous.maximumSteps[name]})`
+    );
+    assertNear(
+      asynchronous.offsets[name],
+      asynchronous.settledOffsets[name],
+      0.003,
+      `The ${name} phase should stay fixed instead of drifting`
+    );
+    assertNear(neutral.offsets[name], 0, 0.001, `100% should preserve ${name} timing`);
+  }
+  assertNear(rightBehind.offsets.Spine, 0, 0.001, '200% should leave the torso current');
+  assertNear(rightBehind.offsets.LeftArm, 0, 0.001, '200% should leave the left arm current');
+  assertNear(rightBehind.offsets.LeftUpLeg, 0, 0.001, '200% should leave the left leg current');
+  assert.ok(rightBehind.offsets.RightArm > 0.6, '200% should place the right arm behind');
+  assert.ok(rightBehind.offsets.RightUpLeg > 0.6, '200% should place the right leg behind');
+  assert.ok(
+    rightBehind.maximumSteps.RightArm < 0.12
+      && rightBehind.maximumSteps.RightUpLeg < 0.12,
+    'The 200% right-side lag should also loop smoothly'
   );
 }
 
@@ -262,6 +516,48 @@ function testShiftingRelationCrossfade() {
   assert.ok(entries.RightArm.relationDrag > 0 && entries.RightArm.relationDrag < 1);
 }
 
+function testShiftingRelationUsesDifferentialRates() {
+  const { root, bones } = createRig();
+  const runtime = createNo60ModificationRuntime(root);
+  const values = createDefaultNo60ModificationValues();
+  values.relations.whole = 200;
+  const delta = 1 / 60;
+  const leftSourceStep = 0.06;
+  const rightSourceStep = 0.02;
+  let leftSourceAngle = 0;
+  let rightSourceAngle = 0;
+  let previousLeftOutput = bones.LeftArm.quaternion.clone();
+  let previousRightOutput = bones.RightArm.quaternion.clone();
+  const leftOutputSteps = [];
+  const rightOutputSteps = [];
+
+  for (let frame = 0; frame < 180; frame += 1) {
+    leftSourceAngle += leftSourceStep;
+    rightSourceAngle += rightSourceStep;
+    bones.LeftArm.quaternion.copy(angleAroundX(leftSourceAngle));
+    bones.RightArm.quaternion.copy(angleAroundX(rightSourceAngle));
+    applyNo60Modifications({ runtime, values, delta });
+
+    if (frame >= 150) {
+      leftOutputSteps.push(previousLeftOutput.angleTo(bones.LeftArm.quaternion));
+      rightOutputSteps.push(previousRightOutput.angleTo(bones.RightArm.quaternion));
+    }
+    previousLeftOutput.copy(bones.LeftArm.quaternion);
+    previousRightOutput.copy(bones.RightArm.quaternion);
+  }
+
+  const average = (samples) => samples.reduce((sum, sample) => sum + sample, 0) / samples.length;
+  const leftRate = average(leftOutputSteps) / leftSourceStep;
+  const rightRate = average(rightOutputSteps) / rightSourceStep;
+  const entries = Object.fromEntries(runtime.entries.map((entry) => [entry.name, entry]));
+
+  assert.equal(runtime.relationFocusRegion, 'leftArm');
+  assertNear(leftRate, 1.5, 0.03, 'Focused region should move at 1.5x');
+  assertNear(rightRate, 0.5, 0.03, 'Non-focused region should move at 0.5x');
+  assertNear(entries.LeftArm.relationSpeedScale, 1.5, 0.01);
+  assertNear(entries.RightArm.relationSpeedScale, 0.5, 0.01);
+}
+
 function testExtendedSpaceHoldDuration() {
   const { root, bones } = createRig();
   const runtime = createNo60ModificationRuntime(root);
@@ -306,7 +602,11 @@ testRegionTags();
 testRegionalResolver();
 testRegionalEnergyClocks();
 testDeterministicRegionalApplications();
-testSynchronicScaleIsBipolar();
+testCircularTravelSmoothsReversalsAndBoundaries();
+testCircularTravelPreservesSkeletonStructure();
+testCircularTravelHasPerceptuallyProgressiveStrength();
+testSynchronicScaleUsesSmoothLoopingPhaseOffsets();
 testShiftingRelationCrossfade();
+testShiftingRelationUsesDifferentialRates();
 testExtendedSpaceHoldDuration();
 console.log('NO.60 regional modification tests passed.');

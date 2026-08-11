@@ -40,9 +40,9 @@ export const NO60_MODIFICATION_DEFINITIONS = Object.freeze([
     masterMax: 200,
     regions: ['whole', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'],
     meaning: 'Changes how straight, rounded, and continuous limb trajectories feel.',
-    visual: 'Lower values straighten the motion; higher values extend an existing curved stroke through full and repeated circular turns. The existing curve lens draws the resulting pathways.',
-    technical: 'Blends animated quaternions toward a stable reference below 100%. Above 100%, it detects a coherent source rotation axis and accumulates additional quaternion travel around that axis instead of adding an unrelated oscillation.',
-    boundary: '0% is maximally linear and 100% preserves the source. Around 150%, a source half-circle can become a full circle; at 200%, the same stroke can continue through two full turns.'
+    visual: 'Lower values straighten the motion. Higher values guide the shoulder and hip roots through smooth bounded circular orbits, making hand and foot paths rounder without twisting the torso or stacking rotations down a limb.',
+    technical: 'Below 100%, animated quaternions blend toward a stable reference. Above 100%, the source rotation axis is filtered into an orthogonal orbit frame. A bounded phase oscillator adds smooth circular travel only at the four limb roots; every child joint keeps its source local rotation, and positions, scales, and bone lengths are never changed.',
+    boundary: '0% is maximally linear and 100% preserves the source. Above 100%, a perceptual response curve makes the change visible immediately, then progressively increases circular phase speed and radius toward 200% while the maximum added joint angle remains bounded.'
   },
   {
     id: 'axes',
@@ -70,9 +70,9 @@ export const NO60_MODIFICATION_DEFINITIONS = Object.freeze([
     masterMax: 200,
     regions: ['whole', 'arms', 'legs'],
     meaning: 'Changes the phase relationship among related limbs while preserving the underlying source movement.',
-    visual: 'Both ends of the scale create the same amount of bilateral phase separation in opposite directions: 0% places the left limbs behind, while 200% places the right limbs behind.',
-    technical: 'Uses the same bounded quaternion-history delay on opposite sides of each bilateral pair. Crossing 100% reverses which side leads without changing or reordering the source choreography.',
-    boundary: '0% is maximum left-side lag, 100% preserves the original timing, and 200% is the equal-and-opposite maximum right-side lag.'
+    visual: 'At 0%, the torso, left arm, right arm, left leg, and right leg each begin at a different fixed point in the same looping choreography. Every body-part track remains smooth while the full body is strongly out of phase. At 200%, the right-side limbs fall behind the left.',
+    technical: 'Samples each regional quaternion track with a fixed time offset and wraps every sample through the animation clip. The offsets ease into place when the control changes, but do not drift during playback. Limbs stay internally coherent and finger joints remain untouched.',
+    boundary: '0% is maximum fixed multi-region phase separation, 100% preserves the original timing, and 200% creates maximum right-side lag.'
   },
   {
     id: 'space',
@@ -100,9 +100,9 @@ export const NO60_MODIFICATION_DEFINITIONS = Object.freeze([
     masterMax: 200,
     regions: ['whole'],
     meaning: 'Directs attention toward the body region currently carrying the strongest change.',
-    visual: 'One stable dominant region remains articulate while every non-highlighted region slows dramatically, strengthening the head-to-target shifting-relation cue.',
-    technical: 'Uses hysteresis to hold one attention region at a time. Above 100%, it preserves that region and applies strong smooth temporal drag everywhere else. Below 100%, it accelerates every non-finger joint by the same rotational factor.',
-    boundary: '0% distributes attention by speeding every body part equally, 100% preserves the source, and 200% isolates one clear center of attention while maintaining continuous motion.'
+    visual: 'One stable dominant region moves faster while every non-highlighted region slows down, strengthening the head-to-target shifting-relation cue.',
+    technical: 'Uses hysteresis to hold one attention region at a time. Above 100%, the focused region ramps toward 1.5x speed while all other eligible regions ramp toward 0.5x speed. Below 100%, it accelerates every non-finger joint by the same rotational factor.',
+    boundary: '0% distributes attention by speeding every body part equally, 100% preserves the source, and 200% isolates one clear center of attention at 1.5x against a 0.5x background.'
   },
   {
     id: 'body',
@@ -255,6 +255,10 @@ function isRegionRoot(name) {
   return /^(hips|spine|spine1|leftarm|rightarm|leftupleg|rightupleg)$/.test(bone);
 }
 
+function isCurveMotionRoot(name) {
+  return /^(leftarm|rightarm|leftupleg|rightupleg)$/.test(cleanBoneName(name));
+}
+
 function isFingerBone(name) {
   return /thumb|finger|index|middle|ring|pinky|little|digit|metacarp/.test(cleanBoneName(name));
 }
@@ -293,6 +297,27 @@ function primaryMotionRegion(tags) {
   return 'whole';
 }
 
+const SYNCHRONIC_PHASE_FRACTIONS = Object.freeze({
+  torso: 0.08,
+  leftArm: 0.32,
+  rightArm: 0.56,
+  leftLeg: 0.18,
+  rightLeg: 0.74,
+  whole: 0.44
+});
+
+function sampleQuaternionHistory(entry, delayFrames, target) {
+  const latestIndex = entry.history.length - 1;
+  const sampleIndex = latestIndex - delayFrames;
+  if (sampleIndex < 0 || latestIndex < 1) return false;
+  const earlierIndex = Math.floor(sampleIndex);
+  const laterIndex = Math.min(latestIndex, earlierIndex + 1);
+  const mix = sampleIndex - earlierIndex;
+  target.copy(entry.history[earlierIndex]);
+  if (laterIndex !== earlierIndex) target.slerp(entry.history[laterIndex], mix);
+  return true;
+}
+
 export function createNo60ModificationRuntime(root, clip = null, clipStart = 0) {
   const entries = [];
   root?.traverse((object) => {
@@ -315,8 +340,13 @@ export function createNo60ModificationRuntime(root, clip = null, clipStart = 0) 
       spaceHoldWeight: 0,
       speed: 0,
       relationMotionScore: 0,
+      syncPhaseOffset: 0,
+      syncInterpolant: null,
+      syncQuaternion: object.quaternion.clone(),
       relationAmount: 0,
       relationDrag: 0,
+      relationSpeedScale: 1,
+      relationInput: object.quaternion.clone(),
       relationOutput: object.quaternion.clone(),
       sourceDeltaAngle: 0,
       sourceDeltaAxis: new THREE.Vector3(0, 1, 0),
@@ -326,9 +356,15 @@ export function createNo60ModificationRuntime(root, clip = null, clipStart = 0) 
       energyBlend: 0,
       energyQuaternion: object.quaternion.clone(),
       curveAxis: new THREE.Vector3(0, 1, 0),
+      curveSecondaryAxis: new THREE.Vector3(1, 0, 0),
       curveAxisReady: false,
       curveActivation: 0,
+      curveAmount: 0,
+      curveAngularVelocity: 0,
+      curvePhase: 0,
+      curveOrbitAmplitude: 0,
       curveRotation: new THREE.Quaternion(),
+      curveMotionRoot: isCurveMotionRoot(object.name),
       regionRoot: isRegionRoot(object.name),
       effectEligible: !isFingerBone(object.name),
       bodyEligible: !isFingerBone(object.name),
@@ -378,6 +414,7 @@ export function createNo60ModificationRuntime(root, clip = null, clipStart = 0) 
       const entry = entriesByName.get(cleanBoneName(trackBoneName));
       if (!entry) continue;
       entry.energyInterpolant = track.createInterpolant();
+      entry.syncInterpolant = track.createInterpolant();
     }
   }
   return {
@@ -404,6 +441,7 @@ const scratchEulerB = new THREE.Euler(0, 0, 0, 'XYZ');
 const scratchQuaternion = new THREE.Quaternion();
 const scratchQuaternionB = new THREE.Quaternion();
 const scratchAxis = new THREE.Vector3();
+const scratchCurveSecondaryAxis = new THREE.Vector3();
 const axisControllerPosition = new THREE.Vector3();
 const axisCurrentDirection = new THREE.Vector3();
 const axisTargetDirection = new THREE.Vector3();
@@ -826,13 +864,22 @@ function updateRelationFocus(runtime, dominantEntry, dominantSpeed, delta) {
 }
 
 function applyCircularTravel(entry, bone, curveSigned, delta) {
+  const smoothingDelta = Math.min(1 / 30, Math.max(1 / 240, delta));
   const validDelta = entry.sourceDeltaAngle > 0.0004 && entry.sourceDeltaAngle < 1.4;
   const startingCurve = validDelta && !entry.curveAxisReady;
   let axisAlignment = 1;
-  let rotationDirection = 1;
   if (validDelta) {
     if (!entry.curveAxisReady) {
       entry.curveAxis.copy(entry.sourceDeltaAxis);
+      scratchCurveSecondaryAxis.set(
+        Math.abs(entry.curveAxis.y) < 0.82 ? 0 : 1,
+        Math.abs(entry.curveAxis.y) < 0.82 ? 1 : 0,
+        0
+      );
+      entry.curveSecondaryAxis.crossVectors(
+        entry.curveAxis,
+        scratchCurveSecondaryAxis
+      ).normalize();
       entry.curveAxisReady = true;
     } else {
       axisAlignment = entry.curveAxis.dot(entry.sourceDeltaAxis);
@@ -840,44 +887,130 @@ function applyCircularTravel(entry, bone, curveSigned, delta) {
       if (axisAlignment < 0) {
         scratchAxis.multiplyScalar(-1);
         axisAlignment *= -1;
-        rotationDirection = -1;
       }
-      entry.curveAxis.lerp(scratchAxis, Math.min(1, delta * 14)).normalize();
+      const axisAlpha = 1 - Math.exp(-smoothingDelta * 3.4);
+      entry.curveAxis.lerp(scratchAxis, axisAlpha).normalize();
+
+      // Transport the second orbit axis along the filtered source axis. This
+      // keeps the two-axis circle frame stable without allowing an abrupt
+      // reference-axis swap to flip the limb.
+      scratchCurveSecondaryAxis.copy(entry.curveSecondaryAxis).addScaledVector(
+        entry.curveAxis,
+        -entry.curveSecondaryAxis.dot(entry.curveAxis)
+      );
+      if (scratchCurveSecondaryAxis.lengthSq() < 0.0001) {
+        scratchCurveSecondaryAxis.set(
+          Math.abs(entry.curveAxis.y) < 0.82 ? 0 : 1,
+          Math.abs(entry.curveAxis.y) < 0.82 ? 1 : 0,
+          0
+        ).cross(entry.curveAxis);
+      }
+      scratchCurveSecondaryAxis.normalize();
+      if (entry.curveSecondaryAxis.dot(scratchCurveSecondaryAxis) < 0) {
+        scratchCurveSecondaryAxis.multiplyScalar(-1);
+      }
+      entry.curveSecondaryAxis.lerp(scratchCurveSecondaryAxis, axisAlpha).normalize();
     }
   }
 
   const motionAmount = validDelta
     ? THREE.MathUtils.clamp((entry.speed - 0.02) / 0.28, 0, 1)
     : 0;
-  const coherence = THREE.MathUtils.clamp((axisAlignment - 0.42) / 0.58, 0, 1);
-  const activationTarget = motionAmount * coherence;
-  const activationResponse = activationTarget > entry.curveActivation ? 12 : 3.2;
+  const coherence = THREE.MathUtils.clamp((axisAlignment - 0.05) / 0.95, 0, 1);
+  const activationTarget = motionAmount * THREE.MathUtils.lerp(0.32, 1, coherence);
+  const activationResponse = activationTarget > entry.curveActivation ? 4.6 : 1.8;
   entry.curveActivation = startingCurve
-    ? activationTarget
+    ? activationTarget * 0.12
     : THREE.MathUtils.lerp(
       entry.curveActivation,
       activationTarget,
-      Math.min(1, delta * activationResponse)
+      1 - Math.exp(-smoothingDelta * activationResponse)
     );
 
-  if (validDelta && entry.curveActivation > 0.001) {
-    // This curve maps a source half-turn to roughly one full turn at 150%
-    // and two full turns at 200%, while remaining continuous in between.
-    const angularMultiplier = 1 + curveSigned * (1 + curveSigned * 2);
-    const additionalAngle = entry.sourceDeltaAngle
-      * (angularMultiplier - 1)
-      * entry.curveActivation
-      * rotationDirection;
-    scratchQuaternion.setFromAxisAngle(entry.curveAxis, additionalAngle);
-    entry.curveRotation.multiply(scratchQuaternion).normalize();
-  } else if (entry.sourceDeltaAngle >= 1.4) {
-    // A large one-frame source jump is a clip boundary or seek, not a curve.
+  const curveAmountAlpha = 1 - Math.exp(-smoothingDelta * 3.8);
+  entry.curveAmount = THREE.MathUtils.lerp(entry.curveAmount, curveSigned, curveAmountAlpha);
+  // A square-root-like perceptual scale makes small increases above 100%
+  // visible, while the hard upper bound remains identical at 200%.
+  const perceptualCurveStrength = Math.pow(
+    THREE.MathUtils.clamp(entry.curveAmount, 0, 1),
+    0.55
+  );
+  const targetAngularVelocity = validDelta
+    ? THREE.MathUtils.clamp(
+      entry.speed * (0.7 + perceptualCurveStrength * 2.35),
+      0,
+      9
+    )
+    : 0;
+  const velocityResponse = targetAngularVelocity > entry.curveAngularVelocity ? 3.2 : 1.35;
+  const velocityAlpha = 1 - Math.exp(-smoothingDelta * velocityResponse);
+  entry.curveAngularVelocity = THREE.MathUtils.lerp(
+    entry.curveAngularVelocity,
+    targetAngularVelocity,
+    velocityAlpha
+  );
+
+  const maximumPhaseStep = THREE.MathUtils.lerp(0.08, 0.17, perceptualCurveStrength);
+  const phaseStep = THREE.MathUtils.clamp(
+    entry.curveAngularVelocity * smoothingDelta,
+    0,
+    maximumPhaseStep
+  );
+  entry.curvePhase = THREE.MathUtils.euclideanModulo(
+    entry.curvePhase + phaseStep,
+    Math.PI * 2
+  );
+
+  // The orbit radius is deliberately bounded. Increasing the control adds
+  // faster, rounder travel rather than accumulating an ever-growing twist.
+  const targetOrbitAmplitude = 0.36
+    * perceptualCurveStrength
+    * entry.curveActivation;
+  const amplitudeResponse = targetOrbitAmplitude > entry.curveOrbitAmplitude ? 3.8 : 1.8;
+  entry.curveOrbitAmplitude = THREE.MathUtils.lerp(
+    entry.curveOrbitAmplitude,
+    targetOrbitAmplitude,
+    1 - Math.exp(-smoothingDelta * amplitudeResponse)
+  );
+
+  scratchQuaternion.setFromAxisAngle(
+    entry.curveAxis,
+    Math.cos(entry.curvePhase) * entry.curveOrbitAmplitude
+  );
+  scratchQuaternionB.setFromAxisAngle(
+    entry.curveSecondaryAxis,
+    Math.sin(entry.curvePhase) * entry.curveOrbitAmplitude
+  );
+  scratchQuaternion.multiply(scratchQuaternionB).normalize();
+  const orbitAlpha = 1 - Math.exp(-smoothingDelta * 7.2);
+  entry.curveRotation.slerp(scratchQuaternion, orbitAlpha).normalize();
+  bone.quaternion.multiply(entry.curveRotation);
+}
+
+function releaseCircularTravel(entry, bone, delta) {
+  const smoothingDelta = Math.min(1 / 30, Math.max(1 / 240, delta));
+  const releaseAlpha = 1 - Math.exp(-smoothingDelta * 4.2);
+  entry.curveAmount = THREE.MathUtils.lerp(entry.curveAmount, 0, releaseAlpha);
+  entry.curveActivation = THREE.MathUtils.lerp(entry.curveActivation, 0, releaseAlpha);
+  entry.curveAngularVelocity = THREE.MathUtils.lerp(
+    entry.curveAngularVelocity,
+    0,
+    releaseAlpha
+  );
+  entry.curveOrbitAmplitude = THREE.MathUtils.lerp(
+    entry.curveOrbitAmplitude,
+    0,
+    releaseAlpha
+  );
+  scratchQuaternion.identity();
+  entry.curveRotation.slerp(scratchQuaternion, releaseAlpha).normalize();
+  if (
+    entry.curveRotation.angleTo(scratchQuaternion) < 0.001
+    && Math.abs(entry.curveAngularVelocity) < 0.001
+  ) {
     entry.curveRotation.identity();
-    entry.curveActivation = 0;
     entry.curveAxisReady = false;
-  } else if (entry.curveActivation < 0.08) {
-    scratchQuaternion.identity();
-    entry.curveRotation.slerp(scratchQuaternion, Math.min(1, delta * 0.8));
+    entry.curvePhase = 0;
   }
   bone.quaternion.multiply(entry.curveRotation);
 }
@@ -950,7 +1083,7 @@ export function applyNo60Modifications({
     );
     entry.previousSource.copy(source);
     entry.history.push(source.clone());
-    if (entry.history.length > 38) entry.history.shift();
+    if (entry.history.length > 78) entry.history.shift();
     if (
       entry.bodyEligible
       && entry.relationMotionScore > dominantSpeed
@@ -977,6 +1110,8 @@ export function applyNo60Modifications({
       entry.hold.copy(bone.quaternion);
       entry.curveRotation.identity();
       entry.curveActivation = 0;
+      entry.curveAmount = 0;
+      entry.curveAngularVelocity = 0;
       entry.curveAxisReady = false;
       entry.stationary = 0;
       entry.spaceExtensionPeak = 0;
@@ -993,48 +1128,70 @@ export function applyNo60Modifications({
     const relationValue = resolveApplicableValue(values, definitions.relations, tags);
 
     const syncSigned = THREE.MathUtils.clamp((syncValue - 100) / 100, -1, 1);
-    const isLeftPhase = entry.tags.has('leftArm') || entry.tags.has('leftLeg');
-    const isRightPhase = entry.tags.has('rightArm') || entry.tags.has('rightLeg');
-    const delaysThisSide = syncSigned < -0.001
-      ? isLeftPhase
-      : syncSigned > 0.001 && isRightPhase;
-    const delayFrames = delaysThisSide
-      ? Math.round(Math.abs(syncSigned) * 30)
-      : 0;
-    if (delayFrames > 0 && entry.history.length > delayFrames) {
-      const delayed = entry.history[Math.max(0, entry.history.length - 1 - delayFrames)];
-      const phaseStrength = THREE.MathUtils.clamp(0.46 + delayFrames / 34, 0, 0.94);
-      bone.quaternion.slerp(delayed, phaseStrength).normalize();
+    const isRightPhase = tags.has('rightArm') || tags.has('rightLeg');
+    const phaseSeparation = Math.max(0, -syncSigned);
+    const stableRightLag = Math.max(0, syncSigned);
+    const clipDuration = Math.max(0, runtime.clipEnd - runtime.clipStart);
+    const region = primaryMotionRegion(tags);
+    let targetPhaseOffset = 0;
+    if (clipDuration > 0 && phaseSeparation > 0.001) {
+      targetPhaseOffset = clipDuration
+        * (SYNCHRONIC_PHASE_FRACTIONS[region] ?? SYNCHRONIC_PHASE_FRACTIONS.whole)
+        * phaseSeparation;
+    } else if (clipDuration > 0 && stableRightLag > 0.001 && isRightPhase) {
+      targetPhaseOffset = clipDuration * 0.32 * stableRightLag;
+    }
+
+    // The offset only moves when the slider changes. Once settled, each body
+    // region follows the source clip at a constant phase and therefore retains
+    // the clip's original smooth velocity instead of receiving a moving delay.
+    const syncOffsetAlpha = 1 - Math.exp(-Math.max(1 / 240, delta) * 2.8);
+    entry.syncPhaseOffset = THREE.MathUtils.lerp(
+      entry.syncPhaseOffset,
+      targetPhaseOffset,
+      syncOffsetAlpha
+    );
+    if (Math.abs(entry.syncPhaseOffset - targetPhaseOffset) < 0.00001) {
+      entry.syncPhaseOffset = targetPhaseOffset;
+    }
+
+    if (entry.syncPhaseOffset > 0.0001) {
+      const phaseBaseTime = Number.isFinite(entry.energyTime)
+        ? entry.energyTime
+        : Number.isFinite(actionTime)
+          ? actionTime
+          : runtime.clipStart + runtime.elapsed;
+      if (entry.syncInterpolant && clipDuration > 0) {
+        const sampled = entry.syncInterpolant.evaluate(
+          wrapNo60ClipTime(runtime, phaseBaseTime - entry.syncPhaseOffset)
+        );
+        entry.syncQuaternion.set(sampled[0], sampled[1], sampled[2], sampled[3]).normalize();
+        bone.quaternion.copy(entry.syncQuaternion);
+      } else {
+        // History sampling is retained only for clips without accessible
+        // quaternion tracks. The fixed delay remains fractional and smooth.
+        const fallbackDelayFrames = Math.min(
+          entry.history.length - 1,
+          entry.syncPhaseOffset * 60
+        );
+        if (
+          fallbackDelayFrames > 0.5
+          && sampleQuaternionHistory(entry, fallbackDelayFrames, scratchQuaternionB)
+        ) {
+          bone.quaternion.copy(scratchQuaternionB).normalize();
+        }
+      }
     }
 
     const curveSigned = (curveValue - 100) / 100;
     if (curveSigned < -0.001) {
-      entry.curveRotation.identity();
-      entry.curveActivation = 0;
-      entry.curveAxisReady = false;
+      releaseCircularTravel(entry, bone, delta);
       bone.quaternion.slerp(entry.rest, -curveSigned * 0.78);
       bone.quaternion.slerp(entry.previous, -curveSigned * 0.18);
-    } else if (curveSigned > 0.001) {
+    } else if (curveSigned > 0.001 && entry.curveMotionRoot) {
       applyCircularTravel(entry, bone, curveSigned, delta);
-      // Curved travel is most expressive during coherent rotation, but the
-      // regional control must remain observable on quieter source frames too.
-      // A small rest-relative expansion provides that deterministic baseline.
-      if (entry.curveActivation < 0.08) {
-        scratchQuaternion.copy(entry.rest).invert().multiply(bone.quaternion);
-        scratchEuler.setFromQuaternion(scratchQuaternion, 'XYZ');
-        const quietCurveExpansion = 1 + curveSigned * 0.22;
-        scratchEuler.set(
-          scratchEuler.x * quietCurveExpansion,
-          scratchEuler.y * quietCurveExpansion,
-          scratchEuler.z * quietCurveExpansion,
-          'XYZ'
-        );
-        bone.quaternion.copy(entry.rest).multiply(scratchQuaternion.setFromEuler(scratchEuler));
-      }
     } else {
-      entry.curveRotation.identity();
-      entry.curveActivation = 0;
-      entry.curveAxisReady = false;
+      releaseCircularTravel(entry, bone, delta);
     }
 
     const axisSigned = (axesValue - 100) / 100;
@@ -1132,13 +1289,58 @@ export function applyNo60Modifications({
     entry.relationDrag = THREE.MathUtils.lerp(entry.relationDrag, targetDrag, dragAlpha);
 
     if (entry.relationAmount > 0.001 || entry.relationDrag > 0.001) {
-      // Slowly blend into and out of the temporal hold. When attention shifts,
-      // the old focus catches up while the new background region eases into
-      // its drag, so neither joint set can snap to a distant source pose.
-      const dragStrength = THREE.MathUtils.clamp(entry.relationDrag, 0, 1);
-      const followRate = THREE.MathUtils.lerp(22, 0.48, dragStrength ** 0.78);
-      const followAlpha = 1 - Math.exp(-Math.max(1 / 240, delta) * followRate);
-      entry.relationOutput.slerp(bone.quaternion, followAlpha).normalize();
+      // Integrate the already-modified joint delta at a different rate for
+      // each attention region. At the maximum setting the focused region runs
+      // at 1.5x while all non-focused regions run at 0.5x. The multiplier is
+      // crossfaded so a focus handoff cannot introduce a pose discontinuity.
+      const isFocusedRegion = Boolean(dominantRegion && entryRegion === dominantRegion);
+      const targetSpeedScale = isFocusedRegion
+        ? 1 + THREE.MathUtils.clamp(entry.relationAmount, 0, 1) * 0.5
+        : 1 - THREE.MathUtils.clamp(entry.relationDrag, 0, 1) * 0.5;
+      const speedScaleResponse = targetSpeedScale > entry.relationSpeedScale ? 5.8 : 4.2;
+      const speedScaleAlpha = 1 - Math.exp(
+        -Math.max(1 / 240, delta) * speedScaleResponse
+      );
+      entry.relationSpeedScale = THREE.MathUtils.lerp(
+        entry.relationSpeedScale,
+        targetSpeedScale,
+        speedScaleAlpha
+      );
+
+      scratchQuaternion.copy(entry.relationInput).invert().multiply(bone.quaternion).normalize();
+      if (scratchQuaternion.w < 0) {
+        scratchQuaternion.set(
+          -scratchQuaternion.x,
+          -scratchQuaternion.y,
+          -scratchQuaternion.z,
+          -scratchQuaternion.w
+        );
+      }
+      const relationHalfAngleSine = Math.sqrt(Math.max(0, 1 - scratchQuaternion.w ** 2));
+      const relationDeltaAngle = 2 * Math.acos(
+        THREE.MathUtils.clamp(scratchQuaternion.w, -1, 1)
+      );
+      entry.relationInput.copy(bone.quaternion);
+      if (
+        relationHalfAngleSine > 0.00001
+        && relationDeltaAngle > 0.00001
+        && relationDeltaAngle < 1.25
+      ) {
+        scratchAxis.set(
+          scratchQuaternion.x / relationHalfAngleSine,
+          scratchQuaternion.y / relationHalfAngleSine,
+          scratchQuaternion.z / relationHalfAngleSine
+        ).normalize();
+        scratchQuaternionB.setFromAxisAngle(
+          scratchAxis,
+          relationDeltaAngle * entry.relationSpeedScale
+        );
+        entry.relationOutput.multiply(scratchQuaternionB).normalize();
+      } else if (relationDeltaAngle >= 1.25) {
+        // A seek or clip boundary establishes a new baseline instead of being
+        // interpreted as an extremely fast attention shift.
+        entry.relationOutput.copy(bone.quaternion);
+      }
       bone.quaternion.copy(entry.relationOutput);
     } else if (
       entry.relationAmount < -0.001
@@ -1154,8 +1356,12 @@ export function applyNo60Modifications({
         entry.sourceDeltaAngle * uniformSpeedUp
       );
       bone.quaternion.multiply(scratchQuaternionB).normalize();
+      entry.relationInput.copy(bone.quaternion);
+      entry.relationSpeedScale = 1;
       entry.relationOutput.copy(bone.quaternion);
     } else {
+      entry.relationInput.copy(bone.quaternion);
+      entry.relationSpeedScale = 1;
       entry.relationOutput.copy(bone.quaternion);
     }
 
