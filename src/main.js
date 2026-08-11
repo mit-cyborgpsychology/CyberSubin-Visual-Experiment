@@ -8,6 +8,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import {
   createExternalSpacePointCloud,
   updateExternalSpacePointCloud
@@ -19,6 +20,26 @@ import {
   setFlowFieldOptions,
   updateFlowField
 } from './flow-field.js';
+import { createSmoothMixClip, MIX_UP_PARTS } from './mix-up.js';
+import {
+  PHYSICS_CONSTANT_DEFINITIONS,
+  createDefaultPhysicsConstants,
+  getPhysicsConstantDefinition,
+  sanitizePhysicsConstants
+} from './physics-constants.js';
+import {
+  NO60_MODIFICATION_DEFINITIONS,
+  applyNo60Modifications,
+  createDefaultNo60ModificationMasters,
+  createDefaultNo60ModificationValues,
+  createNo60ModificationRuntime,
+  getNo60EnergyPlaybackRate,
+  getNo60RegionLabel,
+  randomizeNo60ModificationValues,
+  resolveNo60ModificationValue,
+  sanitizeNo60ModificationMasters,
+  sanitizeNo60ModificationValues
+} from './no60-modification.js';
 import { readViewStateFromParams, writeViewStateToParams } from './view-url.js';
 import { posture } from '../59.ts';
 import './styles.css';
@@ -48,6 +69,13 @@ document.body.classList.toggle('embedded-view', EMBEDDED_VIEW);
 
 const DISPLAY_HEIGHT = 3;
 const DEFAULT_CAMERA_OFFSET = new THREE.Vector3(4.65, 1.07, 7.25);
+const NO60_COMPARISON_SEPARATION = 1.48;
+const NO60_COMPARISON_CAMERA_SCALE = 1.34;
+const NO60_COMPARISON_CAMERA_OFFSET = new THREE.Vector3(
+  0,
+  DEFAULT_CAMERA_OFFSET.y * NO60_COMPARISON_CAMERA_SCALE,
+  Math.hypot(DEFAULT_CAMERA_OFFSET.x, DEFAULT_CAMERA_OFFSET.z) * NO60_COMPARISON_CAMERA_SCALE
+);
 const DEFAULT_CAMERA_DIRECTION = DEFAULT_CAMERA_OFFSET.clone().normalize();
 const EMBEDDED_CAMERA_DISTANCE = new THREE.Vector3(2.15, 0.88, 6.15).length();
 const EMBEDDED_CAMERA_OFFSET = DEFAULT_CAMERA_DIRECTION.clone().multiplyScalar(EMBEDDED_CAMERA_DISTANCE);
@@ -59,7 +87,7 @@ const CURVE_HISTORY_LENGTH = 108;
 const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
 const DEFAULT_SPEED = 3;
-const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5]);
+const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10]);
 const DEFAULT_AVATAR_COLOR = 'lightGrey';
 const DEFAULT_AVATAR_GRADIENT_COLOR = '#d9dcde';
 const DEFAULT_SURFACE_MODE = 'smooth';
@@ -84,8 +112,12 @@ const DEFAULT_FLOW_FIELD_RECOVERY = 1;
 const DEFAULT_FLOW_FIELD_PROXIMITY_FADE = 1;
 const DEFAULT_FLOW_FIELD_CONCENTRATION = 1;
 const SEQUENCE_TRANSITION_DURATION = 1.2;
+const MIX_UP_LOOP_BLEND_DURATION = 0.55;
 const INITIAL_POSE_TRIM_SECONDS = 0.35;
 const MAX_SEQUENCE_LENGTH = 24;
+const NO60_DRAWER_MIN_HEIGHT = 68;
+const NO60_DRAWER_DEFAULT_HEIGHT = 405;
+const NO60_DRAWER_TOP_GAP = 150;
 let sequenceEntryCounter = 0;
 const FLOW_FIELD_SLIDER_CONFIG = Object.freeze({
   thickness: {
@@ -316,6 +348,19 @@ const EXPERIMENT_INFO = {
   }
 };
 const EXPERIMENT_KEYS = Object.keys(EXPERIMENT_INFO);
+const NO60_VISUAL_TARGET_OPTIONS = Object.freeze([
+  ['off', 'OFF'],
+  ['original', 'ORIGINAL'],
+  ['modified', 'MODIFIED'],
+  ['both', 'BOTH']
+]);
+
+function createDefaultNo60VisualizationTargets() {
+  return Object.fromEntries(
+    NO60_MODIFICATION_DEFINITIONS.map((definition) => [definition.id, 'off'])
+  );
+}
+
 const EXPERIMENT_RED = new THREE.Color(0xfb5c50);
 const CURVE_LINE_RADIUS = 0.0072;
 const SYNC_LINE_WIDTH = 1.8;
@@ -493,7 +538,34 @@ const ui = {
   sequenceTrack: document.querySelector('#sequence-track'),
   sequenceStatus: document.querySelector('#sequence-status'),
   sequencePlay: document.querySelector('#sequence-play'),
+  sequenceRandomFive: document.querySelector('#sequence-random-five'),
   sequenceClear: document.querySelector('#sequence-clear'),
+  mixUpToggle: document.querySelector('#mix-up-toggle'),
+  mixUpToggleStatus: document.querySelector('#mix-up-toggle-status'),
+  mixUpPanel: document.querySelector('#mix-up-panel'),
+  mixUpClose: document.querySelector('#mix-up-close'),
+  mixUpPlay: document.querySelector('#mix-up-play'),
+  mixUpReset: document.querySelector('#mix-up-reset'),
+  mixUpStatus: document.querySelector('#mix-up-status'),
+  mixUpSourceGrid: document.querySelector('#mix-up-source-grid'),
+  mixUpMethodButtons: [...document.querySelectorAll('[data-mix-up-method]')],
+  no60ModificationToggle: document.querySelector('#no60-modification-toggle'),
+  no60ModificationToggleStatus: document.querySelector('#no60-modification-toggle-status'),
+  no60ModificationPanel: document.querySelector('#no60-modification-panel'),
+  no60ModificationResizer: document.querySelector('#no60-modification-resizer'),
+  no60ModificationClose: document.querySelector('#no60-modification-close'),
+  no60ModificationRandom: document.querySelector('#no60-modification-random'),
+  no60ModificationReset: document.querySelector('#no60-modification-reset'),
+  no60ModificationStatus: document.querySelector('#no60-modification-status'),
+  no60ModificationControls: document.querySelector('#no60-modification-controls'),
+  no60ModificationInfo: document.querySelector('#no60-modification-info'),
+  no60ModificationInfoClose: document.querySelector('#no60-modification-info-close'),
+  no60ModificationInfoTitle: document.querySelector('#no60-modification-info-title'),
+  no60ModificationInfoMeaning: document.querySelector('#no60-modification-info-meaning'),
+  no60ModificationInfoVisual: document.querySelector('#no60-modification-info-visual'),
+  no60ModificationInfoTechnical: document.querySelector('#no60-modification-info-technical'),
+  no60ModificationInfoBoundary: document.querySelector('#no60-modification-info-boundary'),
+  no60ComparisonOverlay: document.querySelector('#no60-comparison-overlay'),
   axisWidget: document.querySelector('.axis-widget'),
   sequenceDurationButtons: [...document.querySelectorAll('[data-sequence-duration]')],
   sequenceEasingButtons: [...document.querySelectorAll('[data-sequence-easing]')],
@@ -576,6 +648,16 @@ const ui = {
   bodyPointsStatus: document.querySelector('#body-points-status'),
   bodyCenteringToggle: document.querySelector('#body-centering-toggle'),
   bodyCenteringStatus: document.querySelector('#body-centering-status'),
+  physicsConstantsToggle: document.querySelector('#physics-constants-toggle'),
+  physicsConstantsStatus: document.querySelector('#physics-constants-status'),
+  physicsConstantsPanel: document.querySelector('#physics-constants-panel'),
+  physicsConstantsClose: document.querySelector('#physics-constants-close'),
+  physicsConstantsReset: document.querySelector('#physics-constants-reset'),
+  physicsConstantInputs: [...document.querySelectorAll('[data-physics-constant]')],
+  physicsConstantValues: new Map(
+    [...document.querySelectorAll('[data-physics-value]')]
+      .map((output) => [output.dataset.physicsValue, output])
+  ),
   floorLightButtons: [...document.querySelectorAll('[data-floor-light]')],
   traceSampleRateButtons: [...document.querySelectorAll('[data-trace-sample-rate]')],
   analysisPanel: document.querySelector('.analysis-panel'),
@@ -613,6 +695,39 @@ const state = {
   sequenceEnded: false,
   sequenceTransitionDuration: SEQUENCE_TRANSITION_DURATION,
   sequenceTransitionEasing: 'ease',
+  mixUpPanelOpen: false,
+  mixUpActive: false,
+  mixUpReady: false,
+  mixUpPreparing: false,
+  mixUpConfigured: false,
+  mixUpLoadToken: 0,
+  mixUpActions: [],
+  mixUpElapsed: 0,
+  mixUpDuration: 0,
+  mixUpMode: 'manual',
+  mixUpSources: Object.fromEntries(MIX_UP_PARTS.map((part) => [part.id, DEFAULT_MOVEMENT_ID])),
+  mixUpResumePlaying: null,
+  no60ModificationMode: false,
+  no60ModificationPanelOpen: false,
+  no60ModificationMasters: createDefaultNo60ModificationMasters(),
+  no60ModificationValues: createDefaultNo60ModificationValues(),
+  no60VisualizationTargets: createDefaultNo60VisualizationTargets(),
+  no60VisualizationClones: new Map(),
+  no60ModificationRuntime: null,
+  no60OriginalRoot: null,
+  no60OriginalContainer: null,
+  no60OriginalMixer: null,
+  no60OriginalAction: null,
+  no60OriginalBones: new Map(),
+  no60OriginalTrackers: [],
+  no60OriginalExperimentVisuals: null,
+  no60PreviousExperiments: [],
+  no60PreviousAnalysisVisible: null,
+  no60InfoElement: null,
+  no60PanelHeight: NO60_DRAWER_DEFAULT_HEIGHT,
+  no60PanelDrag: null,
+  energyMotionIntensity: 0,
+  energyBaselineMotionIntensity: 0,
   bones: new Map(),
   trackers: [],
   playing: true,
@@ -642,6 +757,8 @@ const state = {
   avatarOffsetX: 0,
   avatarOffsetY: 0,
   bodyCenterLocked: true,
+  physicsConstantsOpen: false,
+  physicsConstants: createDefaultPhysicsConstants(),
   activeExperiments: new Set(),
   visualizationMenuOpen: false,
   flowFieldEnabled: false,
@@ -827,13 +944,17 @@ const ENERGY_SURFACE_RADII = new Float32Array(TRACK_DEFINITIONS.map(({ id }) => 
   leftFoot: 0.16,
   rightFoot: 0.16
 }[id] ?? 0.18)));
-const energySurfaceUniforms = {
+function createEnergySurfaceUniforms() {
+  return {
   enabled: { value: 0 },
   positions: { value: TRACK_DEFINITIONS.map(() => new THREE.Vector3()) },
   levels: { value: new Float32Array(TRACK_DEFINITIONS.length) },
   radii: { value: ENERGY_SURFACE_RADII },
   bodyHeight: { value: DISPLAY_HEIGHT }
-};
+  };
+}
+const energySurfaceUniforms = createEnergySurfaceUniforms();
+const no60OriginalEnergySurfaceUniforms = createEnergySurfaceUniforms();
 const avatarGradientUniforms = {
   enabled: { value: 0 },
   top: { value: new THREE.Color(DEFAULT_AVATAR_GRADIENT_COLOR) },
@@ -897,11 +1018,11 @@ function hideLoading() {
 
 function updateMovementInformation(movement) {
   if (movement.source === 'indexed') {
-    document.title = `${movement.thai} — Cyber Subin Motion Atlas`;
+    document.title = `${movement.thai} — Cyber Subin 2.0 Lab`;
     return;
   }
 
-  document.title = `${movement.fileName} — Cyber Subin Motion Atlas`;
+  document.title = `${movement.fileName} — Cyber Subin 2.0 Lab`;
 }
 
 function disposeObject(object) {
@@ -912,11 +1033,34 @@ function disposeObject(object) {
   });
 }
 
+function clearNo60ComparisonClone() {
+  state.no60OriginalMixer?.stopAllAction();
+  if (state.no60OriginalContainer) {
+    scene.remove(state.no60OriginalContainer);
+    state.no60OriginalRoot?.traverse((child) => {
+      if (Array.isArray(child.material)) child.material.forEach((material) => material.dispose?.());
+      else child.material?.dispose?.();
+    });
+  }
+  state.no60OriginalRoot = null;
+  state.no60OriginalContainer = null;
+  state.no60OriginalMixer = null;
+  state.no60OriginalAction = null;
+  state.no60OriginalBones = new Map();
+  state.no60OriginalTrackers = [];
+  state.no60OriginalExperimentVisuals = null;
+  state.no60ModificationRuntime = null;
+  if (ui.no60ComparisonOverlay) ui.no60ComparisonOverlay.hidden = true;
+}
+
 function clearCurrentModel() {
   state.ready = false;
+  clearNo60ComparisonClone();
   flowFieldVisual.group.visible = false;
   energySurfaceUniforms.enabled.value = 0;
   energySurfaceUniforms.levels.value.fill(0);
+  no60OriginalEnergySurfaceUniforms.enabled.value = 0;
+  no60OriginalEnergySurfaceUniforms.levels.value.fill(0);
   clearAvatarRepresentations();
   if (state.root) {
     scene.remove(state.modelContainer ?? state.root);
@@ -935,6 +1079,10 @@ function clearCurrentModel() {
   state.sequencePreparing = false;
   state.sequenceActions = [];
   state.sequenceTransition = null;
+  state.mixUpLoadToken += 1;
+  state.mixUpReady = false;
+  state.mixUpPreparing = false;
+  releaseMixUpActions();
   state.mixer?.stopAllAction();
   state.root = null;
   state.modelContainer = null;
@@ -945,6 +1093,7 @@ function clearCurrentModel() {
   state.bones = new Map();
   state.trackers = [];
   state.experimentVisuals = null;
+  state.no60VisualizationClones = new Map();
   state.experimentFocusId = null;
   state.experimentFocusElapsed = 0;
   state.embeddedEffectElapsed = 0;
@@ -1172,7 +1321,9 @@ function updateSequenceProgressIndicators() {
 }
 
 function setSequenceTimelineOpen(open) {
-  state.sequenceTimelineOpen = Boolean(open) && !EMBEDDED_VIEW;
+  const nextOpen = Boolean(open) && !EMBEDDED_VIEW;
+  if (nextOpen && state.mixUpPanelOpen) setMixUpPanelOpen(false);
+  state.sequenceTimelineOpen = nextOpen;
   ui.sequenceTimelinePanel.hidden = !state.sequenceTimelineOpen;
   ui.sequenceTimelineToggle.setAttribute('aria-expanded', String(state.sequenceTimelineOpen));
   ui.sequenceTimelineToggleStatus.textContent = state.sequenceTimelineOpen ? 'HIDE' : 'SHOW';
@@ -1180,6 +1331,7 @@ function setSequenceTimelineOpen(open) {
     ? 'CURRENT'
     : 'SPEED';
   document.body.classList.toggle('sequence-timeline-open', state.sequenceTimelineOpen);
+  applyAvatarScreenOffset();
 }
 
 function updateAddToSequenceAvailability() {
@@ -1207,11 +1359,11 @@ function renderSequenceTimeline() {
 
   if (state.sequencePreparing) {
     ui.sequenceStatus.textContent = `LOADING ${state.sequence.length} MOVEMENT${state.sequence.length === 1 ? '' : 'S'}…`;
+  } else if (state.sequenceEnded && state.sequence.length) {
+    ui.sequenceStatus.textContent = 'SEQUENCE COMPLETE · FINAL POSE HELD';
   } else if (state.sequenceActive && state.sequence.length) {
     const activeNumber = Math.min(state.sequenceIndex + 1, state.sequence.length);
-    ui.sequenceStatus.textContent = state.sequenceEnded
-      ? 'SEQUENCE COMPLETE · FINAL POSE HELD'
-      : state.sequenceTransition?.preview
+    ui.sequenceStatus.textContent = state.sequenceTransition?.preview
       ? `PREVIEWING ${String(state.sequenceTransition.fromIndex + 1).padStart(2, '0')} → ${String(state.sequenceTransition.toIndex + 1).padStart(2, '0')}`
       : `SEQUENCE ON · ${String(activeNumber).padStart(2, '0')} / ${String(state.sequence.length).padStart(2, '0')}`;
   } else {
@@ -1469,6 +1621,8 @@ async function initializeSequencePlayback() {
 
 function startSequence({ startIndex = 0, previewIndex = null } = {}) {
   if (!state.sequence.length) return;
+  if (state.mixUpActive) stopMixUp({ reloadModel: false });
+  setMixUpPanelOpen(false);
   if (state.sequenceResumePlaying === null) state.sequenceResumePlaying = state.playing;
   state.sequenceActive = true;
   state.sequenceEnded = false;
@@ -1601,7 +1755,6 @@ function setSequenceEntryPlaybackSpeed(index, value) {
 
 function setSequenceLoopMode(value) {
   state.sequenceLoopMode = value === 'end' ? 'end' : 'loop';
-  if (state.sequenceLoopMode === 'loop') state.sequenceEnded = false;
   renderSequenceTimeline();
 }
 
@@ -1629,6 +1782,703 @@ function clearSequence() {
   if (wasActive && state.ready) {
     const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === ui.select.value);
     if (movementIndex >= 0) loadModel(movementIndex);
+  }
+}
+
+function createRandomFiveSequence() {
+  const movementIds = INDEXED_MOVEMENTS.map((movement) => movement.id);
+  for (let index = movementIds.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [movementIds[index], movementIds[randomIndex]] = [movementIds[randomIndex], movementIds[index]];
+  }
+
+  stopSequence();
+  state.sequence = movementIds.slice(0, 5).map((movementId) => {
+    const entry = createSequenceEntry(movementId, { speed: state.speed });
+    entry.playbackSpeed = state.speed;
+    return entry;
+  });
+  state.sequenceIndex = 0;
+  state.sequenceEnded = false;
+  state.sequencePendingStartIndex = 0;
+  state.sequencePendingPreviewIndex = null;
+  setSequenceTimelineOpen(true);
+  renderSequenceTimeline();
+}
+
+function getCurrentIndexedMovementId() {
+  return INDEXED_MOVEMENTS.some((movement) => movement.id === ui.select.value)
+    ? ui.select.value
+    : DEFAULT_MOVEMENT_ID;
+}
+
+function getRandomIndexedMovementIds(count) {
+  const movementIds = INDEXED_MOVEMENTS.map((movement) => movement.id);
+  for (let index = movementIds.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [movementIds[index], movementIds[randomIndex]] = [movementIds[randomIndex], movementIds[index]];
+  }
+  return movementIds.slice(0, Math.min(count, movementIds.length));
+}
+
+function configureMixUpSources(sources, mode = 'manual') {
+  for (const part of MIX_UP_PARTS) {
+    const movementId = String(sources?.[part.id] ?? '');
+    if (INDEXED_MOVEMENTS.some((movement) => movement.id === movementId)) {
+      state.mixUpSources[part.id] = movementId;
+    }
+  }
+  state.mixUpMode = mode;
+  state.mixUpConfigured = true;
+  renderMixUpPanel();
+}
+
+function renderMixUpPanel() {
+  ui.mixUpToggle.setAttribute('aria-expanded', String(state.mixUpPanelOpen));
+  ui.mixUpToggleStatus.textContent = state.mixUpPanelOpen
+    ? 'HIDE'
+    : state.mixUpActive
+      ? 'LIVE'
+      : 'SHOW';
+  ui.mixUpPlay.disabled = state.mixUpPreparing || !state.ready;
+  ui.mixUpPlay.textContent = state.mixUpPreparing
+    ? 'PREPARING…'
+    : state.mixUpActive
+      ? 'STOP MIX'
+      : 'PLAY MIX';
+
+  if (state.mixUpPreparing) {
+    ui.mixUpStatus.textContent = 'LOADING 5 MOVEMENT LAYERS…';
+  } else if (state.mixUpActive && state.mixUpReady) {
+    ui.mixUpStatus.textContent = 'LIVE · 5 INDEPENDENT BODY-REGION LOOPS · SMOOTH LOOP CLOSURE';
+  } else if (state.mixUpConfigured) {
+    const modeLabels = {
+      topBottom: 'TOP / BOTTOM RANDOM MIX READY',
+      leftRight: 'LEFT / RIGHT RANDOM MIX READY',
+      frankenstein: 'FRANKENSTEIN RANDOM MIX READY',
+      manual: 'CUSTOM BODY-REGION MIX READY'
+    };
+    ui.mixUpStatus.textContent = modeLabels[state.mixUpMode] ?? modeLabels.manual;
+  } else {
+    ui.mixUpStatus.textContent = 'READY · COMBINE MOVEMENT SOURCES BY BODY REGION';
+  }
+
+  ui.mixUpMethodButtons.forEach((button) => {
+    button.classList.toggle('active', button.dataset.mixUpMethod === state.mixUpMode);
+  });
+
+  const movementOptions = INDEXED_MOVEMENTS.map((movement) => (
+    `<option value="${movement.id}">${String(movement.modelNumber).padStart(2, '0')} · ${escapeSequenceMarkup(movement.english.trim())}</option>`
+  )).join('');
+
+  ui.mixUpSourceGrid.innerHTML = MIX_UP_PARTS.map((part) => {
+    const movementId = state.mixUpSources[part.id];
+    const movement = INDEXED_MOVEMENTS.find((candidate) => candidate.id === movementId);
+    return `
+      <label class="mix-up-source-card${state.mixUpActive ? ' active' : ''}">
+        <span>${escapeSequenceMarkup(part.label)}</span>
+        <strong>${movement ? String(movement.modelNumber).padStart(2, '0') : '—'}</strong>
+        <small>${escapeSequenceMarkup(part.description)}</small>
+        <select data-mix-up-source="${part.id}" aria-label="Movement source for ${escapeSequenceMarkup(part.label)}">
+          ${movementOptions.replace(`value="${movementId}"`, `value="${movementId}" selected`)}
+        </select>
+      </label>`;
+  }).join('');
+}
+
+function setMixUpPanelOpen(open) {
+  const nextOpen = Boolean(open) && !EMBEDDED_VIEW;
+  if (nextOpen && state.sequenceTimelineOpen) setSequenceTimelineOpen(false);
+  if (nextOpen && !state.mixUpConfigured) {
+    const movementId = getCurrentIndexedMovementId();
+    configureMixUpSources(Object.fromEntries(MIX_UP_PARTS.map((part) => [part.id, movementId])));
+  }
+  state.mixUpPanelOpen = nextOpen;
+  ui.mixUpPanel.hidden = !nextOpen;
+  document.body.classList.toggle('mix-up-panel-open', nextOpen);
+  renderMixUpPanel();
+  applyAvatarScreenOffset();
+}
+
+function createMixUpSourceEntry(movementId) {
+  return { movementId };
+}
+
+function releaseMixUpActions() {
+  for (const entry of state.mixUpActions) {
+    entry.action?.stop();
+    state.mixer?.uncacheAction(entry.clip, state.root);
+    state.mixer?.uncacheClip(entry.clip);
+  }
+  state.mixUpActions = [];
+}
+
+async function initializeMixUpPlayback() {
+  if (
+    state.mixUpPreparing
+    || !state.mixUpActive
+    || !state.root
+    || !state.mixer
+  ) return;
+
+  const token = ++state.mixUpLoadToken;
+  const resumePlaying = state.mixUpResumePlaying ?? state.playing;
+  state.mixUpResumePlaying = resumePlaying;
+  state.mixUpPreparing = true;
+  state.mixUpReady = false;
+  setPlaying(false);
+  renderMixUpPanel();
+
+  try {
+    const sources = await Promise.all(MIX_UP_PARTS.map(async (part) => ({
+      part,
+      source: await loadSequenceClipData(createMixUpSourceEntry(state.mixUpSources[part.id]))
+    })));
+    if (token !== state.mixUpLoadToken || !state.mixUpActive || !state.mixer) return;
+
+    releaseMixUpActions();
+    state.mixer.stopAllAction();
+    state.mixUpActions = sources.map(({ part, source }) => {
+      const clip = createSmoothMixClip({
+        sourceClip: source.clip,
+        clipStart: source.clipStart,
+        partId: part.id,
+        name: `mix-up-${part.id}-${source.movement.id}-${token}`,
+        blendDuration: MIX_UP_LOOP_BLEND_DURATION
+      });
+      if (!clip) return null;
+      const action = state.mixer.clipAction(clip);
+      action.reset();
+      action.enabled = true;
+      action.setEffectiveTimeScale(1);
+      action.setEffectiveWeight(1);
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.play();
+      action.time = 0;
+      return { part, movement: source.movement, clip, action };
+    }).filter(Boolean);
+
+    if (!state.mixUpActions.length) throw new Error('No compatible body-region animation tracks were found.');
+    const primary = state.mixUpActions.find((entry) => entry.part.id === 'body') ?? state.mixUpActions[0];
+    state.action = primary.action;
+    state.clip = primary.clip;
+    state.clipStart = 0;
+    state.mixUpDuration = Math.max(...state.mixUpActions.map((entry) => entry.clip.duration));
+    state.duration = state.mixUpDuration;
+    state.mixUpElapsed = 0;
+    state.lastClipTime = 0;
+    state.mixer.update(0);
+    centerCharacter();
+    resetTrackerSamples();
+    state.mixUpPreparing = false;
+    state.mixUpReady = true;
+    ui.timeline.min = '0';
+    ui.timeline.max = String(state.mixUpDuration);
+    ui.timeline.value = '0';
+    ui.totalTime.textContent = formatTime(state.mixUpDuration);
+    setPlaying(state.mixUpResumePlaying ?? true);
+    state.mixUpResumePlaying = null;
+    renderMixUpPanel();
+  } catch (error) {
+    if (token !== state.mixUpLoadToken) return;
+    console.error(error);
+    state.mixUpPreparing = false;
+    state.mixUpReady = false;
+    state.mixUpActive = false;
+    state.mixUpResumePlaying = null;
+    setPlaying(false);
+    ui.mixUpStatus.textContent = 'MIX-UP COULD NOT BE PREPARED';
+    renderMixUpPanel();
+  }
+}
+
+function startMixUp() {
+  if (!state.ready) return;
+  if (state.sequenceActive) stopSequence({ reloadModel: false });
+  setSequenceTimelineOpen(false);
+  state.mixUpActive = true;
+  state.mixUpReady = false;
+  state.mixUpResumePlaying = true;
+  state.sequenceEnded = false;
+  setMixUpPanelOpen(true);
+  renderMixUpPanel();
+  void initializeMixUpPlayback();
+}
+
+function stopMixUp({ reloadModel = true } = {}) {
+  state.mixUpLoadToken += 1;
+  state.mixUpActive = false;
+  state.mixUpReady = false;
+  state.mixUpPreparing = false;
+  releaseMixUpActions();
+  state.mixUpElapsed = 0;
+  state.mixUpDuration = 0;
+  state.mixUpResumePlaying = null;
+  state.mixer?.stopAllAction();
+  renderMixUpPanel();
+  if (!reloadModel || !state.ready) return;
+  const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === ui.select.value);
+  if (movementIndex >= 0) loadModel(movementIndex);
+}
+
+function resetMixUp() {
+  const wasActive = state.mixUpActive;
+  if (wasActive) stopMixUp();
+  const movementId = getCurrentIndexedMovementId();
+  configureMixUpSources(Object.fromEntries(MIX_UP_PARTS.map((part) => [part.id, movementId])));
+  state.mixUpMode = 'manual';
+  renderMixUpPanel();
+}
+
+function setMixUpSource(partId, movementId) {
+  if (!MIX_UP_PARTS.some((part) => part.id === partId)) return;
+  if (!INDEXED_MOVEMENTS.some((movement) => movement.id === movementId)) return;
+  state.mixUpSources[partId] = movementId;
+  state.mixUpMode = 'manual';
+  state.mixUpConfigured = true;
+  renderMixUpPanel();
+  if (state.mixUpActive) {
+    state.mixUpResumePlaying = state.playing;
+    state.mixUpLoadToken += 1;
+    state.mixUpPreparing = false;
+    void initializeMixUpPlayback();
+  }
+}
+
+function randomizeMixUp(method) {
+  const movementIds = getRandomIndexedMovementIds(5);
+  let sources;
+  if (method === 'topBottom') {
+    sources = {
+      body: movementIds[0],
+      leftHand: movementIds[0],
+      rightHand: movementIds[0],
+      leftFoot: movementIds[1],
+      rightFoot: movementIds[1]
+    };
+  } else if (method === 'leftRight') {
+    sources = {
+      body: movementIds[2],
+      leftHand: movementIds[0],
+      rightHand: movementIds[1],
+      leftFoot: movementIds[0],
+      rightFoot: movementIds[1]
+    };
+  } else {
+    sources = Object.fromEntries(MIX_UP_PARTS.map((part, index) => [part.id, movementIds[index]]));
+    method = 'frankenstein';
+  }
+  configureMixUpSources(sources, method);
+  startMixUp();
+}
+
+function buildNo60ModificationControls() {
+  if (!ui.no60ModificationControls || ui.no60ModificationControls.children.length) return;
+  ui.no60ModificationControls.innerHTML = NO60_MODIFICATION_DEFINITIONS.map((definition) => {
+    const masterValue = state.no60ModificationMasters[definition.id];
+    const rows = definition.regions.filter((region) => region !== 'whole').map((region) => {
+      const value = state.no60ModificationValues[definition.id][region];
+      const unit = definition.id === 'body' ? '°' : '%';
+      return `
+        <div class="no60-modification-row">
+          <label for="no60-${definition.id}-${region}">${getNo60RegionLabel(region)}</label>
+          <output data-no60-output="${definition.id}.${region}" for="no60-${definition.id}-${region}">${Math.round(value)}${unit}</output>
+          <input
+            id="no60-${definition.id}-${region}"
+            data-no60-value="${definition.id}.${region}"
+            type="range"
+            min="${definition.min}"
+            max="${definition.max}"
+            step="${definition.step}"
+            value="${value}"
+            aria-label="${definition.label} ${getNo60RegionLabel(region)}"
+          >
+        </div>`;
+    }).join('');
+    const axisControls = definition.axisOptions
+      ? `<div class="no60-modification-axis" aria-label="Body modification rotation axis">
+          <span>ROTATION AXIS</span>
+          ${definition.axisOptions.map((axis) => (
+            `<button type="button" data-no60-axis="${axis}" class="${state.no60ModificationValues.bodyAxis === axis ? 'active' : ''}">${axis.toUpperCase()}</button>`
+          )).join('')}
+        </div>`
+      : '';
+    const visualTarget = state.no60VisualizationTargets[definition.id] ?? 'off';
+    const visualControls = NO60_VISUAL_TARGET_OPTIONS.map(([target, label]) => (
+      `<button type="button" data-no60-visual="${definition.id}.${target}" class="${visualTarget === target ? 'active' : ''}">${label}</button>`
+    )).join('');
+    const masterUnit = definition.id === 'body' ? '°' : '%';
+    return `
+      <section class="no60-modification-card" data-no60-card="${definition.id}">
+        <header class="no60-modification-card__heading">
+          <div><span>${definition.label}</span><small>${definition.id === 'body' ? 'ROTATION · -180–180°' : `REGIONAL INTENSITY · ${definition.min}–${definition.max}%`}</small></div>
+          <div class="no60-card-actions">
+            <button class="no60-card-reset" type="button" data-no60-reset="${definition.id}" aria-label="Reset ${definition.label}">RESET</button>
+            <button class="no60-info-button" type="button" data-no60-info="${definition.id}" aria-label="Explain ${definition.label}">i</button>
+          </div>
+        </header>
+        <div class="no60-element-master">
+          <label for="no60-master-${definition.id}">FULL BODY</label>
+          <output data-no60-master-output="${definition.id}" for="no60-master-${definition.id}">${Math.round(masterValue)}${masterUnit}</output>
+          <input id="no60-master-${definition.id}" data-no60-master="${definition.id}" type="range" min="${definition.masterMin ?? 0}" max="${definition.masterMax ?? 100}" step="1" value="${masterValue}" aria-label="${definition.label} full body intensity">
+        </div>
+        <div class="no60-visual-target" role="group" aria-label="Show ${definition.label} visualization on">
+          <span>VISUAL ON</span>${visualControls}
+        </div>
+        ${axisControls}
+        <div class="no60-modification-rows">${rows}</div>
+      </section>`;
+  }).join('');
+}
+
+function getNo60ModificationDefinition(id) {
+  return NO60_MODIFICATION_DEFINITIONS.find((definition) => definition.id === id);
+}
+
+function syncNo60ModificationMaster(elementId) {
+  const definition = getNo60ModificationDefinition(elementId);
+  if (!definition) return;
+  const fullBodyValue = Number(
+    state.no60ModificationValues[elementId]?.whole ?? definition.neutral
+  );
+  state.no60ModificationMasters[elementId] = THREE.MathUtils.clamp(
+    Number.isFinite(fullBodyValue) ? fullBodyValue : definition.neutral,
+    definition.masterMin ?? definition.min,
+    definition.masterMax ?? definition.max
+  );
+}
+
+function syncAllNo60ModificationMasters() {
+  for (const definition of NO60_MODIFICATION_DEFINITIONS) {
+    syncNo60ModificationMaster(definition.id);
+  }
+}
+
+function updateNo60ModificationExperimentModes() {
+  if (!state.no60ModificationMode) return;
+  const active = EXPERIMENT_KEYS.filter((id) => {
+    const definition = getNo60ModificationDefinition(id);
+    if (!definition || state.no60VisualizationTargets[id] === 'off') return false;
+    const changed = definition.regions.some(
+      (region) => Math.abs(state.no60ModificationValues[id][region] - definition.neutral) > 0.5
+    );
+    // Once a lens has been explicitly shown, keep it armed at the neutral
+    // value as well. This prevents RESET from permanently clearing the visual
+    // and lets ORIGINAL / MODIFIED / BOTH reactivate it without first moving a
+    // modification slider away from its default.
+    return changed || state.activeExperiments.has(id);
+  });
+  setExperimentModes(active);
+}
+
+function updateNo60ModificationUi() {
+  buildNo60ModificationControls();
+  ui.no60ModificationToggle?.setAttribute('aria-expanded', String(state.no60ModificationPanelOpen));
+  if (ui.no60ModificationToggleStatus) {
+    ui.no60ModificationToggleStatus.textContent = state.no60ModificationMode ? 'LIVE' : 'SHOW';
+  }
+  let changedCount = 0;
+  let activeElementCount = 0;
+  for (const definition of NO60_MODIFICATION_DEFINITIONS) {
+    const master = state.no60ModificationMasters[definition.id];
+    const masterInput = ui.no60ModificationControls?.querySelector(`[data-no60-master="${definition.id}"]`);
+    const masterOutput = ui.no60ModificationControls?.querySelector(`[data-no60-master-output="${definition.id}"]`);
+    if (masterInput) masterInput.value = String(master);
+    if (masterOutput) masterOutput.textContent = `${Math.round(master)}${definition.id === 'body' ? '°' : '%'}`;
+    let elementChanged = false;
+    for (const region of definition.regions) {
+      const value = state.no60ModificationValues[definition.id][region];
+      const key = `${definition.id}.${region}`;
+      const input = ui.no60ModificationControls?.querySelector(`[data-no60-value="${key}"]`);
+      const output = ui.no60ModificationControls?.querySelector(`[data-no60-output="${key}"]`);
+      if (input) input.value = String(value);
+      if (output) output.textContent = `${Math.round(value)}${definition.id === 'body' ? '°' : '%'}`;
+      if (Math.abs(value - definition.neutral) > 0.5) {
+        changedCount += 1;
+        elementChanged = true;
+      }
+    }
+    if (elementChanged) activeElementCount += 1;
+  }
+  ui.no60ModificationControls?.querySelectorAll('[data-no60-axis]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.no60Axis === state.no60ModificationValues.bodyAxis);
+  });
+  ui.no60ModificationControls?.querySelectorAll('[data-no60-visual]').forEach((button) => {
+    const [elementId, target] = button.dataset.no60Visual.split('.');
+    button.classList.toggle('active', state.no60VisualizationTargets[elementId] === target);
+  });
+  if (ui.no60ModificationStatus) {
+    ui.no60ModificationStatus.textContent = activeElementCount
+      ? `LIVE · ${activeElementCount} ELEMENTS · ${changedCount} REGIONAL SETTINGS`
+      : 'ORIGINAL + MODIFIED · ADJUST AN ELEMENT TO BEGIN';
+  }
+}
+
+function showNo60ModificationInfo(id) {
+  const definition = getNo60ModificationDefinition(id);
+  if (!definition || !ui.no60ModificationInfo) return;
+  state.no60InfoElement = id;
+  ui.no60ModificationInfoTitle.textContent = definition.label;
+  ui.no60ModificationInfoMeaning.textContent = definition.meaning;
+  ui.no60ModificationInfoVisual.textContent = definition.visual;
+  ui.no60ModificationInfoTechnical.textContent = definition.technical;
+  ui.no60ModificationInfoBoundary.textContent = `${definition.regions.map(getNo60RegionLabel).join(', ')}. ${definition.boundary}`;
+  ui.no60ModificationInfo.hidden = false;
+}
+
+function hideNo60ModificationInfo() {
+  state.no60InfoElement = null;
+  if (ui.no60ModificationInfo) ui.no60ModificationInfo.hidden = true;
+}
+
+function refreshNo60ModifiedPose(
+  delta = 1 / 60,
+  { syncOriginal = false, advanceEnergy = false } = {}
+) {
+  if (!state.no60ModificationMode || !state.root || !state.mixer || !state.action) return;
+  const actionTime = state.action.time;
+  state.action.time = actionTime;
+  state.mixer.update(0);
+  if (state.no60OriginalAction && state.no60OriginalMixer) {
+    if (syncOriginal) state.no60OriginalAction.time = actionTime;
+    state.no60OriginalMixer.update(0);
+  }
+  applyNo60Modifications({
+    runtime: state.no60ModificationRuntime,
+    values: state.no60ModificationValues,
+    delta,
+    actionTime,
+    advanceEnergy,
+    resetEnergyTime: syncOriginal
+  });
+  centerCharacter();
+  state.root.updateMatrixWorld(true);
+}
+
+function advanceNo60OriginalReference(delta) {
+  if (
+    !state.no60ModificationMode
+    || !state.no60OriginalAction
+    || !state.no60OriginalMixer
+    || !state.clip
+  ) return;
+  const playableDuration = Math.max(0.0001, state.clip.duration - state.clipStart);
+  const currentOffset = state.no60OriginalAction.time - state.clipStart;
+  state.no60OriginalAction.time = state.clipStart + THREE.MathUtils.euclideanModulo(
+    currentOffset + Math.max(0, delta),
+    playableDuration
+  );
+  state.no60OriginalMixer.update(0);
+}
+
+function setNo60ModificationMaster(elementId, value) {
+  const definition = getNo60ModificationDefinition(elementId);
+  if (!definition) return;
+  const nextValue = THREE.MathUtils.clamp(
+    Number(value) || 0,
+    definition.masterMin ?? definition.min,
+    definition.masterMax ?? definition.max
+  );
+  state.no60ModificationMasters[elementId] = nextValue;
+  state.no60ModificationValues[elementId].whole = nextValue;
+  updateNo60ModificationExperimentModes();
+  updateNo60ModificationUi();
+  refreshNo60ModifiedPose();
+}
+
+function setNo60VisualizationTarget(elementId, target) {
+  if (!getNo60ModificationDefinition(elementId)) return;
+  if (!NO60_VISUAL_TARGET_OPTIONS.some(([value]) => value === target)) return;
+  state.no60VisualizationTargets[elementId] = target;
+  if (EXPERIMENT_INFO[elementId]) {
+    if (target === 'off') state.activeExperiments.delete(elementId);
+    else state.activeExperiments.add(elementId);
+  }
+  updateExperimentVisibility();
+  updateNo60ModificationUi();
+  applyNo60VisualizationVisibility();
+}
+
+function setNo60ModificationValue(key, value) {
+  const [elementId, region] = String(key).split('.');
+  const definition = getNo60ModificationDefinition(elementId);
+  if (!definition || !definition.regions.includes(region)) return;
+  state.no60ModificationValues[elementId][region] = THREE.MathUtils.clamp(
+    Number(value) || 0,
+    definition.min,
+    definition.max
+  );
+  syncNo60ModificationMaster(elementId);
+  updateNo60ModificationExperimentModes();
+  updateNo60ModificationUi();
+  refreshNo60ModifiedPose();
+}
+
+function setNo60ModificationAxis(axis) {
+  if (!['x', 'y', 'z', 'xyz'].includes(axis)) return;
+  state.no60ModificationValues.bodyAxis = axis;
+  updateNo60ModificationUi();
+  refreshNo60ModifiedPose();
+}
+
+function randomizeNo60Modification() {
+  state.no60ModificationValues = randomizeNo60ModificationValues();
+  syncAllNo60ModificationMasters();
+  updateNo60ModificationExperimentModes();
+  updateNo60ModificationUi();
+  refreshNo60ModifiedPose();
+}
+
+function resetNo60ModificationElement(elementId) {
+  const definition = getNo60ModificationDefinition(elementId);
+  if (!definition) return;
+  for (const region of definition.regions) {
+    state.no60ModificationValues[elementId][region] = definition.neutral;
+  }
+  state.no60ModificationMasters[elementId] = definition.neutral;
+  if (elementId === 'body') state.no60ModificationValues.bodyAxis = 'y';
+  updateNo60ModificationExperimentModes();
+  updateNo60ModificationUi();
+  refreshNo60ModifiedPose();
+}
+
+function resetNo60Modification() {
+  state.no60ModificationValues = createDefaultNo60ModificationValues();
+  state.no60ModificationMasters = createDefaultNo60ModificationMasters();
+  state.no60VisualizationTargets = createDefaultNo60VisualizationTargets();
+  hideNo60ModificationInfo();
+  setExperimentModes([]);
+  updateNo60ModificationUi();
+  // The drawer-level reset is the complete NO.60 reset: restore its controls
+  // and return the active movement/sequence/mix-up transport to the beginning.
+  // Element-card reset buttons intentionally remain local and do not seek.
+  seekToProgress(0);
+  refreshNo60ModifiedPose();
+  updateTransport();
+}
+
+function getNo60PanelMaxHeight() {
+  return Math.max(NO60_DRAWER_MIN_HEIGHT, window.innerHeight - NO60_DRAWER_TOP_GAP);
+}
+
+function setNo60PanelHeight(value) {
+  const maximum = getNo60PanelMaxHeight();
+  state.no60PanelHeight = THREE.MathUtils.clamp(
+    Number(value) || NO60_DRAWER_DEFAULT_HEIGHT,
+    NO60_DRAWER_MIN_HEIGHT,
+    maximum
+  );
+  ui.no60ModificationPanel?.style.setProperty('--no60-panel-height', `${state.no60PanelHeight}px`);
+  ui.no60ModificationPanel?.classList.toggle(
+    'is-collapsed',
+    state.no60PanelHeight <= NO60_DRAWER_MIN_HEIGHT + 1
+  );
+  if (ui.no60ModificationResizer) {
+    ui.no60ModificationResizer.setAttribute('aria-valuemax', String(Math.round(maximum)));
+    ui.no60ModificationResizer.setAttribute('aria-valuenow', String(Math.round(state.no60PanelHeight)));
+  }
+  applyAvatarScreenOffset();
+}
+
+function beginNo60PanelDrag(event) {
+  if (EMBEDDED_VIEW || event.button !== 0) return;
+  const panel = ui.no60ModificationPanel;
+  if (!panel || panel.hidden) return;
+  state.no60PanelDrag = {
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    startHeight: panel.getBoundingClientRect().height
+  };
+  panel.classList.add('is-dragging');
+  document.body.classList.add('resizing-no60-panel');
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+}
+
+function moveNo60Panel(event) {
+  const drag = state.no60PanelDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  setNo60PanelHeight(drag.startHeight - (event.clientY - drag.startY));
+}
+
+function endNo60PanelDrag(event) {
+  const drag = state.no60PanelDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  if (state.no60PanelHeight < 112) setNo60PanelHeight(NO60_DRAWER_MIN_HEIGHT);
+  ui.no60ModificationPanel?.classList.remove('is-dragging');
+  document.body.classList.remove('resizing-no60-panel');
+  if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+  state.no60PanelDrag = null;
+}
+
+function toggleNo60PanelCollapsed() {
+  const collapsed = state.no60PanelHeight <= NO60_DRAWER_MIN_HEIGHT + 1;
+  setNo60PanelHeight(collapsed ? NO60_DRAWER_DEFAULT_HEIGHT : NO60_DRAWER_MIN_HEIGHT);
+}
+
+function handleNo60PanelResizeKey(event) {
+  const amount = event.shiftKey ? 48 : 18;
+  if (event.key === 'ArrowUp') setNo60PanelHeight(state.no60PanelHeight + amount);
+  else if (event.key === 'ArrowDown') setNo60PanelHeight(state.no60PanelHeight - amount);
+  else if (event.key === 'Home') setNo60PanelHeight(NO60_DRAWER_MIN_HEIGHT);
+  else if (event.key === 'End') setNo60PanelHeight(getNo60PanelMaxHeight());
+  else return;
+  event.preventDefault();
+}
+
+function setNo60ModificationMode(enabled, { reloadModel = true } = {}) {
+  const nextEnabled = Boolean(enabled);
+  const panelOpen = nextEnabled && !EMBEDDED_VIEW;
+  if (nextEnabled === state.no60ModificationMode) {
+    state.no60ModificationPanelOpen = panelOpen;
+    document.body.classList.toggle('no60-modification-panel-open', panelOpen);
+    if (ui.no60ModificationPanel) ui.no60ModificationPanel.hidden = !panelOpen;
+    if (panelOpen) setNo60PanelHeight(state.no60PanelHeight);
+    updateNo60ModificationUi();
+    applyAvatarScreenOffset();
+    return;
+  }
+
+  if (nextEnabled) {
+    if (state.sequenceActive) stopSequence({ reloadModel: false });
+    if (state.mixUpActive) stopMixUp({ reloadModel: false });
+    setSequenceTimelineOpen(false);
+    setMixUpPanelOpen(false);
+    state.no60PreviousExperiments = EXPERIMENT_KEYS.filter((key) => state.activeExperiments.has(key));
+    if (!EMBEDDED_VIEW) {
+      state.no60PreviousAnalysisVisible = state.analysisVisible;
+      if (state.analysisVisible) setAnalysisVisibility(false);
+    }
+  }
+
+  state.no60ModificationMode = nextEnabled;
+  state.no60ModificationPanelOpen = panelOpen;
+  document.body.classList.toggle('no60-modification-mode', nextEnabled);
+  document.body.classList.toggle('no60-modification-panel-open', panelOpen);
+  if (ui.no60ModificationPanel) ui.no60ModificationPanel.hidden = !panelOpen;
+  if (panelOpen) setNo60PanelHeight(state.no60PanelHeight);
+  if (!nextEnabled) {
+    hideNo60ModificationInfo();
+    setExperimentModes(state.no60PreviousExperiments);
+    state.no60PreviousExperiments = [];
+    if (!EMBEDDED_VIEW && state.no60PreviousAnalysisVisible !== null) {
+      const restoreAnalysis = state.no60PreviousAnalysisVisible;
+      state.no60PreviousAnalysisVisible = null;
+      setAnalysisVisibility(restoreAnalysis);
+    }
+  } else {
+    updateNo60ModificationExperimentModes();
+  }
+  updateNo60ModificationUi();
+  applyAvatarScreenOffset();
+
+  if (reloadModel && state.ready) {
+    const movementIndex = MOVEMENTS.findIndex((movement) => movement.id === ui.select.value);
+    if (movementIndex >= 0) loadModel(movementIndex);
+  } else if (!nextEnabled) {
+    clearNo60ComparisonClone();
   }
 }
 
@@ -1725,6 +2575,23 @@ function seekSequenceToProgress(progress) {
   setSequenceRuntime(index, Math.min(runtime.playableDuration, requestedTime - offsets[index]), { preserveTrails: true });
 }
 
+function completeSequenceAtEnd(runtime) {
+  runtime.action.time = runtime.clip.duration;
+  state.mixer.update(0);
+  state.lastClipTime = runtime.clip.duration;
+  state.sequenceLoadToken += 1;
+  state.sequenceActive = false;
+  state.sequenceReady = false;
+  state.sequencePreparing = false;
+  state.sequenceTransition = null;
+  state.sequenceEnded = true;
+  state.sequenceResumePlaying = null;
+  state.sequencePendingProgress = null;
+  setPlaying(false);
+  state.sequenceActions = [];
+  renderSequenceTimeline();
+}
+
 function advanceSequencePlayback(delta) {
   if (state.sequenceTransition) {
     const transition = state.sequenceTransition;
@@ -1750,7 +2617,7 @@ function advanceSequencePlayback(delta) {
     updateSequenceRuntimeSelection(to, transition.toIndex);
     state.sequenceTransition = null;
     const looped = transition.toIndex === 0;
-    if (looped) resetTrackerSamples();
+    if (looped) resetTrackerSamples({ preserveEnergy: true });
     if (transition.preview) setPlaying(false);
     renderSequenceTimeline();
     return looped;
@@ -1765,12 +2632,7 @@ function advanceSequencePlayback(delta) {
     && state.sequenceLoopMode === 'end'
     && runtime.action.time >= runtime.clip.duration - 0.001
   ) {
-    runtime.action.time = runtime.clip.duration;
-    state.mixer.update(0);
-    state.lastClipTime = runtime.clip.duration;
-    state.sequenceEnded = true;
-    setPlaying(false);
-    renderSequenceTimeline();
+    completeSequenceAtEnd(runtime);
     return false;
   }
 
@@ -1783,7 +2645,7 @@ function advanceSequencePlayback(delta) {
   return false;
 }
 
-function installEnergySurfaceShader(material) {
+function installEnergySurfaceShader(material, uniforms = energySurfaceUniforms, cacheKey = 'cyber-subin-avatar-gradient-energy-surface-v3') {
   const previousCompile = material.onBeforeCompile;
   const segmentHeatShader = ENERGY_HEAT_LINKS.map(([startId, endId]) => {
     const startIndex = TRACK_DEFINITIONS.findIndex(({ id }) => id === startId);
@@ -1802,7 +2664,14 @@ function installEnergySurfaceShader(material) {
           uEnergyRadii[${startIndex}],
           uEnergyRadii[${endIndex}],
           segmentProgress
-        ) * uEnergyBodyHeight * 0.72;
+        ) * uEnergyBodyHeight;
+        float segmentHeat = mix(
+          uEnergyLevels[${startIndex}],
+          uEnergyLevels[${endIndex}],
+          segmentProgress
+        );
+        float segmentSpread = mix(0.68, 0.96, smoothstep(0.08, 0.92, segmentHeat));
+        segmentRadius *= segmentSpread;
         float segmentDistance = distance(vEnergyWorldPosition, segmentPoint) / max(0.001, segmentRadius);
         float segmentInfluence = 1.0 - smoothstep(0.08, 1.0, segmentDistance);
         float segmentWeight = segmentInfluence * segmentInfluence * 0.86;
@@ -1818,11 +2687,11 @@ function installEnergySurfaceShader(material) {
   }).join('\n');
   material.onBeforeCompile = (shader, rendererContext) => {
     previousCompile?.(shader, rendererContext);
-    shader.uniforms.uEnergyEnabled = energySurfaceUniforms.enabled;
-    shader.uniforms.uEnergyPositions = energySurfaceUniforms.positions;
-    shader.uniforms.uEnergyLevels = energySurfaceUniforms.levels;
-    shader.uniforms.uEnergyRadii = energySurfaceUniforms.radii;
-    shader.uniforms.uEnergyBodyHeight = energySurfaceUniforms.bodyHeight;
+    shader.uniforms.uEnergyEnabled = uniforms.enabled;
+    shader.uniforms.uEnergyPositions = uniforms.positions;
+    shader.uniforms.uEnergyLevels = uniforms.levels;
+    shader.uniforms.uEnergyRadii = uniforms.radii;
+    shader.uniforms.uEnergyBodyHeight = uniforms.bodyHeight;
     shader.uniforms.uAvatarGradientEnabled = avatarGradientUniforms.enabled;
     shader.uniforms.uAvatarGradientTop = avatarGradientUniforms.top;
     shader.uniforms.uAvatarGradientMiddle = avatarGradientUniforms.middle;
@@ -1876,7 +2745,15 @@ function installEnergySurfaceShader(material) {
           float weightedHeat = 0.0;
           float localCoverage = 0.0;
           for (int energyIndex = 0; energyIndex < ${TRACK_DEFINITIONS.length}; energyIndex += 1) {
-            float radius = max(0.001, uEnergyRadii[energyIndex] * uEnergyBodyHeight);
+            float heatSpread = mix(
+              0.92,
+              1.38,
+              smoothstep(0.08, 0.94, uEnergyLevels[energyIndex])
+            );
+            float radius = max(
+              0.001,
+              uEnergyRadii[energyIndex] * uEnergyBodyHeight * heatSpread
+            );
             float normalizedDistance = distance(vEnergyWorldPosition, uEnergyPositions[energyIndex]) / radius;
             float influence = 1.0 - smoothstep(0.06, 1.0, normalizedDistance);
             float weight = influence * influence;
@@ -1896,7 +2773,7 @@ function installEnergySurfaceShader(material) {
       `
     );
   };
-  material.customProgramCacheKey = () => 'cyber-subin-avatar-gradient-energy-surface-v3';
+  material.customProgramCacheKey = () => cacheKey;
 }
 
 function styleModel(root) {
@@ -2199,6 +3076,51 @@ function closePeerControlMenus(except) {
   if (except !== 'line' && state.lineControlsOpen) setLineControlsOpen(false);
   if (except !== 'visualization' && state.visualizationMenuOpen) setVisualizationMenu(false);
   if (except !== 'flowField' && state.flowFieldMenuOpen) setFlowFieldMenu(false);
+  if (except !== 'physics' && state.physicsConstantsOpen) setPhysicsConstantsOpen(false);
+}
+
+function setPhysicsConstantsOpen(open) {
+  if (open) closePeerControlMenus('physics');
+  state.physicsConstantsOpen = Boolean(open);
+  ui.physicsConstantsToggle.setAttribute('aria-expanded', String(state.physicsConstantsOpen));
+  ui.physicsConstantsStatus.textContent = state.physicsConstantsOpen ? 'OPEN' : 'SHOW';
+  ui.physicsConstantsPanel.hidden = !state.physicsConstantsOpen;
+  applyAvatarScreenOffset();
+}
+
+function setPhysicsConstant(id, value) {
+  const definition = getPhysicsConstantDefinition(id);
+  const input = ui.physicsConstantInputs.find((candidate) => candidate.dataset.physicsConstant === id);
+  const numericValue = Number(value);
+  if (!definition || !input || !Number.isFinite(numericValue)) return;
+  const resolvedValue = Number(THREE.MathUtils.clamp(
+    numericValue,
+    definition.min,
+    definition.max
+  ).toFixed(3));
+  const progress = ((resolvedValue - definition.min) / Math.max(0.0001, definition.max - definition.min)) * 100;
+  state.physicsConstants[id] = resolvedValue;
+  input.value = String(resolvedValue);
+  input.style.setProperty('--flow-slider-progress', `${progress}%`);
+  const output = ui.physicsConstantValues.get(id);
+  if (output) output.textContent = `${resolvedValue.toFixed(2)}×`;
+  if (id === 'flowVelocityDamping') {
+    setFlowFieldOptions(flowFieldVisual, { velocityDamping: resolvedValue });
+  }
+  if (id === 'flowMomentumDiffusivity') {
+    setFlowFieldOptions(flowFieldVisual, { momentumDiffusivity: resolvedValue });
+  }
+}
+
+function applyPhysicsConstants(values) {
+  const sanitized = sanitizePhysicsConstants(values);
+  for (const definition of PHYSICS_CONSTANT_DEFINITIONS) {
+    setPhysicsConstant(definition.id, sanitized[definition.id]);
+  }
+}
+
+function resetPhysicsConstants() {
+  applyPhysicsConstants(createDefaultPhysicsConstants());
 }
 
 function setAvatarStyleOpen(open) {
@@ -2429,11 +3351,43 @@ function createTrackers() {
       previousSpeed: 0,
       acceleration: 0,
       energyLevel: 0,
+      baselineEnergyLevel: 0,
+      energyActivityMemory: 0,
+      baselineEnergyActivityMemory: 0,
       curveHistory: [],
       coordinateOrigin: new THREE.Vector3(),
       coordinate: new THREE.Vector3()
     };
   });
+}
+
+function createNo60OriginalTrackers() {
+  state.no60OriginalTrackers = TRACK_DEFINITIONS.map((definition) => {
+    const trackedBones = definition.bones
+      .map((name) => state.no60OriginalBones.get(name))
+      .filter(Boolean);
+    const anchorBone = state.no60OriginalBones.get(definition.anchor) ?? trackedBones[0];
+    return {
+      definition,
+      trackedBones,
+      anchorBone,
+      position: new THREE.Vector3(),
+      anchorPosition: new THREE.Vector3(),
+      motionPreviousPosition: new THREE.Vector3(),
+      velocity: new THREE.Vector3(),
+      speed: 0,
+      previousSpeed: 0,
+      acceleration: 0,
+      curveHistory: []
+    };
+  });
+  state.no60OriginalRoot?.updateMatrixWorld(true);
+  for (const tracker of state.no60OriginalTrackers) {
+    getAveragePosition(tracker.trackedBones, tracker.position);
+    tracker.anchorBone?.getWorldPosition(tracker.anchorPosition);
+    tracker.motionPreviousPosition.copy(tracker.anchorPosition);
+    tracker.curveHistory.push(tracker.anchorPosition.clone());
+  }
 }
 
 function updateExperimentDescription() {
@@ -2475,6 +3429,7 @@ function updateExperimentVisibility() {
     }
   }
   energySurfaceUniforms.enabled.value = state.activeExperiments.has('energy') ? 1 : 0;
+  applyNo60VisualizationVisibility();
   updateExperimentDescription();
 }
 
@@ -2559,6 +3514,17 @@ function getCurrentViewState(
     sequenceTransitionEasings: state.sequence.map((entry) => entry.transitionEasing).join(','),
     sequencePlaybackSpeeds: state.sequence.map((entry) => entry.playbackSpeed).join(','),
     sequenceLoopMode: state.sequenceLoopMode,
+    mixUpSources: MIX_UP_PARTS.map((part) => state.mixUpSources[part.id]).join(','),
+    mixUpMode: state.mixUpMode,
+    mixUpActive: state.mixUpActive,
+    mixUpPanelOpen: state.mixUpPanelOpen,
+    no60ModificationMode: state.no60ModificationMode,
+    no60ModificationPanelOpen: state.no60ModificationPanelOpen,
+    no60ModificationMasters: JSON.stringify(state.no60ModificationMasters),
+    no60ModificationValues: JSON.stringify(state.no60ModificationValues),
+    no60VisualizationTargets: JSON.stringify(state.no60VisualizationTargets),
+    physicsConstants: JSON.stringify(state.physicsConstants),
+    physicsConstantsOpen: state.physicsConstantsOpen,
     flowFieldSpeed: state.flowFieldSpeed,
     flowFieldCount: state.flowFieldCount,
     flowFieldGradient: state.flowFieldGradient,
@@ -2683,6 +3649,16 @@ function applyViewState(view) {
   if (typeof view.cameraControlsOpen === 'boolean') setCameraControlsOpen(view.cameraControlsOpen);
   if (typeof view.lineControlsOpen === 'boolean') setLineControlsOpen(view.lineControlsOpen);
   if (typeof view.visualizationMenuOpen === 'boolean') setVisualizationMenu(view.visualizationMenuOpen);
+  if (typeof view.physicsConstants === 'string') {
+    try {
+      applyPhysicsConstants(sanitizePhysicsConstants(JSON.parse(view.physicsConstants)));
+    } catch {
+      applyPhysicsConstants(createDefaultPhysicsConstants());
+    }
+  }
+  if (typeof view.physicsConstantsOpen === 'boolean') {
+    setPhysicsConstantsOpen(view.physicsConstantsOpen);
+  }
   if (Number.isFinite(Number(view.sequenceTransitionDuration))) {
     setSequenceTransitionDuration(Number(view.sequenceTransitionDuration));
   }
@@ -2732,7 +3708,52 @@ function applyViewState(view) {
       stopSequence({ reloadModel: !EMBEDDED_VIEW });
     }
   }
-  if (typeof view.sequenceTimelineOpen === 'boolean') setSequenceTimelineOpen(view.sequenceTimelineOpen);
+  if (typeof view.mixUpSources === 'string') {
+    const sourceIds = view.mixUpSources.split(',');
+    const sources = Object.fromEntries(MIX_UP_PARTS.map((part, index) => [part.id, sourceIds[index]]));
+    configureMixUpSources(sources, view.mixUpMode || 'manual');
+  }
+  if (view.mixUpActive && !state.mixUpActive) startMixUp();
+  else if (view.mixUpActive === false && state.mixUpActive) stopMixUp({ reloadModel: !EMBEDDED_VIEW });
+  if (typeof view.mixUpPanelOpen === 'boolean') setMixUpPanelOpen(view.mixUpPanelOpen);
+  if (typeof view.sequenceTimelineOpen === 'boolean' && !view.mixUpPanelOpen) {
+    setSequenceTimelineOpen(view.sequenceTimelineOpen);
+  }
+  if (typeof view.no60ModificationValues === 'string') {
+    try {
+      state.no60ModificationValues = sanitizeNo60ModificationValues(JSON.parse(view.no60ModificationValues));
+    } catch {
+      state.no60ModificationValues = createDefaultNo60ModificationValues();
+    }
+  }
+  if (typeof view.no60ModificationMasters === 'string') {
+    try {
+      state.no60ModificationMasters = sanitizeNo60ModificationMasters(JSON.parse(view.no60ModificationMasters));
+    } catch {
+      state.no60ModificationMasters = createDefaultNo60ModificationMasters();
+    }
+  } else {
+    state.no60ModificationMasters = createDefaultNo60ModificationMasters();
+  }
+  // The displayed Full Body controls mirror each element's hidden `whole`
+  // baseline. Regional sliders remain independent local offsets.
+  syncAllNo60ModificationMasters();
+  if (typeof view.no60VisualizationTargets === 'string') {
+    try {
+      const targets = JSON.parse(view.no60VisualizationTargets);
+      for (const definition of NO60_MODIFICATION_DEFINITIONS) {
+        const target = targets?.[definition.id];
+        if (NO60_VISUAL_TARGET_OPTIONS.some(([value]) => value === target)) {
+          state.no60VisualizationTargets[definition.id] = target;
+        }
+      }
+    } catch {
+      // Retain the all-off default when an older or malformed URL is opened.
+    }
+  }
+  if (typeof view.no60ModificationMode === 'boolean') {
+    setNo60ModificationMode(view.no60ModificationMode);
+  }
   const flowFieldViewControls = {
     thickness: view.flowFieldThickness,
     opacity: view.flowFieldOpacity,
@@ -2991,7 +4012,30 @@ function createExperimentalVisuals() {
   relationCore.renderOrder = 20;
   relationsGroup.add(relationBeam, relationHalo, relationCore);
 
-  for (const group of [energyGroup, curvesGroup, axesGroup, syncGroup, spaceGroup, relationsGroup]) {
+  const bodyGroup = new THREE.Group();
+  const bodyItems = ['Hips', 'Spine2', 'LeftArm', 'RightArm', 'LeftUpLeg', 'RightUpLeg']
+    .map((boneName) => {
+      const bone = state.bones.get(boneName);
+      if (!bone) return null;
+      const marker = new THREE.Mesh(
+        new THREE.RingGeometry(0.07, 0.095, 32),
+        new THREE.MeshBasicMaterial({
+          color: EXPERIMENT_RED,
+          transparent: true,
+          opacity: 0.92,
+          side: THREE.DoubleSide,
+          depthTest: false,
+          depthWrite: false,
+          toneMapped: false
+        })
+      );
+      marker.renderOrder = 20;
+      bodyGroup.add(marker);
+      return { bone, marker };
+    })
+    .filter(Boolean);
+
+  for (const group of [energyGroup, curvesGroup, axesGroup, syncGroup, spaceGroup, relationsGroup, bodyGroup]) {
     experimentalObjects.add(group);
   }
 
@@ -3014,9 +4058,191 @@ function createExperimentalVisuals() {
       colors: syncColors
     },
     space: spaceVisuals,
-    relations: { group: relationsGroup, beam: relationBeam, positions: relationPositions, colors: relationColors, halo: relationHalo, core: relationCore }
+    relations: { group: relationsGroup, beam: relationBeam, positions: relationPositions, colors: relationColors, halo: relationHalo, core: relationCore },
+    body: { group: bodyGroup, items: bodyItems }
   };
+  setupNo60VisualizationClones();
   updateExperimentVisibility();
+}
+
+function no60ElementHasModification(id) {
+  const definition = getNo60ModificationDefinition(id);
+  if (!definition) return false;
+  return definition.regions.some(
+    (region) => Math.abs(state.no60ModificationValues[id][region] - definition.neutral) > 0.5
+  );
+}
+
+function setupNo60VisualizationClones() {
+  state.no60VisualizationClones = new Map();
+  state.no60OriginalExperimentVisuals = null;
+  if (!state.no60ModificationMode || EMBEDDED_VIEW || !state.experimentVisuals) return;
+  const cloneTree = (source) => {
+    const clone = source.clone(true);
+    const objectMap = new Map();
+    const isolateTree = (sourceObject, cloneObject) => {
+      objectMap.set(sourceObject, cloneObject);
+      if (cloneObject.geometry) cloneObject.geometry = cloneObject.geometry.clone();
+      if (Array.isArray(cloneObject.material)) {
+        cloneObject.material = cloneObject.material.map((material) => material.clone());
+      } else if (cloneObject.material) {
+        cloneObject.material = cloneObject.material.clone();
+      }
+      const childCount = Math.min(sourceObject.children.length, cloneObject.children.length);
+      for (let index = 0; index < childCount; index += 1) {
+        isolateTree(sourceObject.children[index], cloneObject.children[index]);
+      }
+    };
+    isolateTree(source, clone);
+    return { clone, objectMap };
+  };
+  const originalTrackers = new Map(
+    state.no60OriginalTrackers.map((tracker) => [tracker.definition.id, tracker])
+  );
+
+  const curveTree = cloneTree(state.experimentVisuals.curves.group);
+  const curveLines = new Map();
+  for (const [trackerId, item] of state.experimentVisuals.curves.lines) {
+    curveLines.set(trackerId, {
+      line: curveTree.objectMap.get(item.line),
+      caps: item.caps.map((cap) => curveTree.objectMap.get(cap)),
+      curveStrength: 0,
+      strokeVisible: false,
+      lastGeometryUpdate: -Infinity
+    });
+  }
+
+  const axesTree = cloneTree(state.experimentVisuals.axes.group);
+  const axisItems = state.experimentVisuals.axes.items.map((item) => ({
+    bone: state.no60OriginalBones.get(item.bone.name),
+    marker: axesTree.objectMap.get(item.marker),
+    worldPosition: new THREE.Vector3(),
+    contactAmount: 0
+  })).filter((item) => item.bone && item.marker);
+
+  const syncTree = cloneTree(state.experimentVisuals.sync.group);
+  const syncLines = syncTree.objectMap.get(state.experimentVisuals.sync.lines);
+  const syncPairs = state.experimentVisuals.sync.pairs.map((pair) => ({
+    start: originalTrackers.get(pair.start.definition.id),
+    end: originalTrackers.get(pair.end.definition.id),
+    mirrorX: pair.mirrorX
+  })).filter((pair) => pair.start && pair.end);
+  const syncPositions = new Float32Array(syncPairs.length * 6);
+  const syncColors = new Float32Array(syncPairs.length * 6);
+  syncLines.geometry.setPositions(syncPositions);
+  syncLines.geometry.setColors(syncColors);
+  syncLines.geometry.instanceCount = syncPairs.length;
+  const syncNodes = new Map();
+  for (const [trackerId, node] of state.experimentVisuals.sync.nodes) {
+    const tracker = originalTrackers.get(trackerId);
+    const marker = syncTree.objectMap.get(node.marker);
+    if (tracker && marker) {
+      syncNodes.set(trackerId, { tracker, marker, synchronyTotal: 0, relationshipCount: 0 });
+    }
+  }
+
+  const spaceVisuals = createExternalSpacePointCloud({ embedded: false });
+  const relationTree = cloneTree(state.experimentVisuals.relations.group);
+  const relationBeam = relationTree.objectMap.get(state.experimentVisuals.relations.beam);
+  const relationPositions = new Float32Array(6);
+  const relationColors = new Float32Array(6);
+  relationBeam.geometry.setPositions(relationPositions);
+  relationBeam.geometry.setColors(relationColors);
+  relationBeam.geometry.instanceCount = 1;
+
+  const bodyTree = cloneTree(state.experimentVisuals.body.group);
+  const bodyItems = state.experimentVisuals.body.items.map((item) => ({
+    bone: state.no60OriginalBones.get(item.bone.name),
+    marker: bodyTree.objectMap.get(item.marker)
+  })).filter((item) => item.bone && item.marker);
+
+  state.no60OriginalExperimentVisuals = {
+    curves: { group: curveTree.clone, lines: curveLines },
+    axes: { group: axesTree.clone, items: axisItems },
+    sync: {
+      group: syncTree.clone,
+      pairs: syncPairs,
+      nodes: syncNodes,
+      lines: syncLines,
+      positions: syncPositions,
+      colors: syncColors
+    },
+    space: spaceVisuals,
+    relations: {
+      group: relationTree.clone,
+      beam: relationBeam,
+      positions: relationPositions,
+      colors: relationColors,
+      halo: relationTree.objectMap.get(state.experimentVisuals.relations.halo),
+      core: relationTree.objectMap.get(state.experimentVisuals.relations.core),
+      focusId: null,
+      focusElapsed: 0
+    },
+    body: { group: bodyTree.clone, items: bodyItems }
+  };
+  for (const id of ['curves', 'axes', 'sync', 'space', 'relations', 'body']) {
+    const group = state.no60OriginalExperimentVisuals[id].group;
+    group.name = `CyberSubinNO60OriginalVisual-${id}`;
+    group.visible = false;
+    experimentalObjects.add(group);
+    state.no60VisualizationClones.set(id, group);
+  }
+}
+
+function getNo60VisualizationTarget(id) {
+  const target = state.no60VisualizationTargets[id] ?? 'off';
+  if (!EMBEDDED_VIEW) return target;
+  return target === 'off' ? 'off' : 'modified';
+}
+
+function applyNo60VisualizationVisibility() {
+  if (!state.experimentVisuals) return;
+  if (!state.no60ModificationMode) {
+    for (const clone of state.no60VisualizationClones.values()) clone.visible = false;
+    state.experimentVisuals.body.group.visible = false;
+    no60OriginalEnergySurfaceUniforms.enabled.value = 0;
+    energySurfaceUniforms.enabled.value = state.activeExperiments.has('energy') ? 1 : 0;
+    return;
+  }
+  for (const id of [...EXPERIMENT_KEYS, 'body']) {
+    const active = id === 'body'
+      ? no60ElementHasModification(id)
+      : state.activeExperiments.has(id);
+    const target = getNo60VisualizationTarget(id);
+    const showModified = active && (target === 'modified' || target === 'both');
+    const showOriginal = active && (target === 'original' || target === 'both');
+    if (state.experimentVisuals[id]?.group) {
+      state.experimentVisuals[id].group.visible = showModified;
+    }
+    const clone = state.no60VisualizationClones.get(id);
+    if (clone) clone.visible = showOriginal;
+    if (id === 'energy') {
+      energySurfaceUniforms.enabled.value = showModified ? 1 : 0;
+      no60OriginalEnergySurfaceUniforms.enabled.value = showOriginal ? 1 : 0;
+    }
+  }
+}
+
+const NO60_ENERGY_TRACKER_REGIONS = Object.freeze({
+  body: ['upper'],
+  head: ['upper'],
+  leftArm: ['upper', 'leftArm'],
+  leftHand: ['upper', 'leftArm'],
+  rightArm: ['upper', 'rightArm'],
+  rightHand: ['upper', 'rightArm'],
+  leftLeg: ['lower', 'leftLeg'],
+  leftFoot: ['lower', 'leftLeg'],
+  rightLeg: ['lower', 'rightLeg'],
+  rightFoot: ['lower', 'rightLeg']
+});
+
+function getNo60EnergyControl(trackerId) {
+  if (!state.no60ModificationMode) return 1;
+  return resolveNo60ModificationValue(
+    state.no60ModificationValues,
+    'energy',
+    NO60_ENERGY_TRACKER_REGIONS[trackerId] ?? []
+  ) / 100;
 }
 
 function updateEnergyVisuals(delta) {
@@ -3187,31 +4413,187 @@ function updateEnergyVisuals(delta) {
     rightFoot: THREE.MathUtils.clamp(rightRaisedLoad * 0.12 + leftRaisedLoad * 0.2, 0, 1)
   };
 
-  state.trackers.forEach((tracker, index) => {
-    const speedCue = THREE.MathUtils.clamp(tracker.speed / 1.4, 0, 1);
-    const accelerationCue = THREE.MathUtils.clamp(Math.abs(tracker.acceleration) / 24, 0, 1);
-    const postureLoad = effortByPart[tracker.definition.id] ?? 0;
-    const loadedMotion = (speedCue * 0.025 + accelerationCue * 0.06) * postureLoad;
-    const effort = THREE.MathUtils.clamp(postureLoad + loadedMotion, 0, 1);
-    const heatGain = Math.pow(effort, 1.3) * (0.24 + effort * 0.42) * heatDelta;
-    const cooldownRate = (0.12 + tracker.energyLevel * 0.08) * (1 - effort * 0.9);
-    tracker.energyLevel = THREE.MathUtils.clamp(
-      tracker.energyLevel + heatGain - cooldownRate * heatDelta,
+  const actionSamples = state.trackers.map((tracker) => {
+    const speed = THREE.MathUtils.clamp(tracker.speed / 1.25, 0, 1);
+    const acceleration = THREE.MathUtils.clamp(Math.abs(tracker.acceleration) / 20, 0, 1);
+    return THREE.MathUtils.clamp(speed * 0.64 + acceleration * 0.36, 0, 1);
+  });
+  const originalTrackersById = new Map(
+    state.no60OriginalTrackers.map((tracker) => [tracker.definition.id, tracker])
+  );
+  const baselineActionSamples = state.trackers.map((tracker) => {
+    const originalTracker = originalTrackersById.get(tracker.definition.id) ?? tracker;
+    const speed = THREE.MathUtils.clamp(originalTracker.speed / 1.25, 0, 1);
+    const acceleration = THREE.MathUtils.clamp(Math.abs(originalTracker.acceleration) / 20, 0, 1);
+    return THREE.MathUtils.clamp(speed * 0.64 + acceleration * 0.36, 0, 1);
+  });
+  const summarizeAction = (samples) => {
+    const mean = samples.reduce((sum, value) => sum + value, 0) / Math.max(1, samples.length);
+    const active = samples.filter((value) => value > 0.32).length / Math.max(1, samples.length);
+    return THREE.MathUtils.clamp(mean * 0.68 + active * 0.48, 0, 1);
+  };
+  const instantaneousAction = summarizeAction(actionSamples);
+  const baselineInstantaneousAction = summarizeAction(baselineActionSamples);
+  const actionResponse = instantaneousAction > state.energyMotionIntensity ? 7.2 : 0.72;
+  const baselineActionResponse = baselineInstantaneousAction > state.energyBaselineMotionIntensity
+    ? 7.2
+    : 0.72;
+  state.energyMotionIntensity = THREE.MathUtils.damp(
+    state.energyMotionIntensity,
+    instantaneousAction,
+    actionResponse,
+    heatDelta
+  );
+  state.energyBaselineMotionIntensity = THREE.MathUtils.damp(
+    state.energyBaselineMotionIntensity,
+    baselineInstantaneousAction,
+    baselineActionResponse,
+    heatDelta
+  );
+
+  const thermalSamples = state.trackers.map((tracker) => {
+    const energyControl = getNo60EnergyControl(tracker.definition.id);
+    const originalTracker = originalTrackersById.get(tracker.definition.id) ?? tracker;
+    const speedCue = THREE.MathUtils.clamp(tracker.speed / 1.25, 0, 1);
+    const accelerationCue = THREE.MathUtils.clamp(Math.abs(tracker.acceleration) / 20, 0, 1);
+    const baselineSpeedCue = THREE.MathUtils.clamp(originalTracker.speed / 1.25, 0, 1);
+    const baselineAccelerationCue = THREE.MathUtils.clamp(
+      Math.abs(originalTracker.acceleration) / 20,
       0,
       1
     );
+    const postureLoad = effortByPart[tracker.definition.id] ?? 0;
+    const localMotion = THREE.MathUtils.clamp(speedCue * 0.62 + accelerationCue * 0.38, 0, 1);
+    const baselineLocalMotion = THREE.MathUtils.clamp(
+      baselineSpeedCue * 0.62 + baselineAccelerationCue * 0.38,
+      0,
+      1
+    );
+    const temporalMotion = localMotion * (0.56 + state.energyMotionIntensity * 0.86);
+    const baselineTemporalMotion = baselineLocalMotion
+      * (0.56 + state.energyBaselineMotionIntensity * 0.86);
+    const effort = THREE.MathUtils.clamp(
+      postureLoad * 0.58 + temporalMotion * 0.74 + postureLoad * state.energyMotionIntensity * 0.16,
+      0,
+      1
+    );
+    const baselineEffort = THREE.MathUtils.clamp(
+      postureLoad * 0.58
+        + baselineTemporalMotion * 0.74
+        + postureLoad * state.energyBaselineMotionIntensity * 0.16,
+      0,
+      1
+    );
+    return { tracker, originalTracker, energyControl, effort, baselineEffort };
+  });
+
+  // A slow activity memory distinguishes sustained or frequently repeated work
+  // from an isolated burst. It builds conservatively, then decays over several
+  // seconds so repeatedly active regions retain heat without making the entire
+  // map feel sluggish.
+  const updateActivityMemory = (memory, effort) => {
+    const safeMemory = Number.isFinite(memory) ? memory : 0;
+    return THREE.MathUtils.damp(
+      safeMemory,
+      effort,
+      effort > safeMemory
+        ? 0.75
+        : 0.18 / Math.max(0.25, state.physicsConstants.activityMemoryPersistence),
+      heatDelta
+    );
+  };
+  const integrateLocalHeat = (level, effort, activityMemory, control = 1) => {
+    const gainMultiplier = Math.pow(Math.max(0, control), 1.18);
+    const depositRate = Math.pow(effort, 1.32)
+      * (0.07 + effort * 0.13)
+      * 1.1
+      * state.physicsConstants.heatDepositionRate
+      * gainMultiplier;
+    const insulation = THREE.MathUtils.clamp(
+      effort * 0.55 + activityMemory * 0.65,
+      0,
+      0.86
+    );
+    // Fresh, isolated heat now falls quickly through red and orange. Repeated
+    // movement raises activityMemory and reduces that cooling rate locally.
+    const coolingCoefficient = (0.11 + level * 0.15)
+      * (1 - insulation)
+      * state.physicsConstants.thermalDissipationRate;
+    const retainedHeat = level * Math.exp(-coolingCoefficient * heatDelta);
+    return THREE.MathUtils.clamp(retainedHeat + depositRate * heatDelta, 0, 1);
+  };
+  const modifiedLocalHeat = thermalSamples.map(({ tracker, effort, energyControl }) => {
+    tracker.energyActivityMemory = updateActivityMemory(
+      tracker.energyActivityMemory,
+      effort
+    );
+    return integrateLocalHeat(
+      tracker.energyLevel,
+      effort,
+      tracker.energyActivityMemory,
+      energyControl
+    );
+  });
+  const baselineLocalHeat = thermalSamples.map(({ tracker, baselineEffort }) => {
+    tracker.baselineEnergyActivityMemory = updateActivityMemory(
+      tracker.baselineEnergyActivityMemory,
+      baselineEffort
+    );
+    return integrateLocalHeat(
+      tracker.baselineEnergyLevel,
+      baselineEffort,
+      tracker.baselineEnergyActivityMemory
+    );
+  });
+  const trackerIndexById = new Map(
+    thermalSamples.map(({ tracker }, index) => [tracker.definition.id, index])
+  );
+  const diffuseHeat = (levels, effortKey) => {
+    const diffused = levels.slice();
+    for (const [startId, endId] of ENERGY_HEAT_LINKS) {
+      const startIndex = trackerIndexById.get(startId);
+      const endIndex = trackerIndexById.get(endId);
+      if (startIndex == null || endIndex == null) continue;
+      const difference = levels[startIndex] - levels[endIndex];
+      const averageHeat = (levels[startIndex] + levels[endIndex]) * 0.5;
+      const averageEffort = (
+        thermalSamples[startIndex][effortKey] + thermalSamples[endIndex][effortKey]
+      ) * 0.5;
+      // Warm tissue conducts faster, and active circulation gently increases
+      // transport without instantly washing a local hotspot across the body.
+      const conductivity = (0.075 + averageHeat * 0.18 + averageEffort * 0.045)
+        * state.physicsConstants.thermalDiffusivity;
+      const transfer = difference * conductivity * heatDelta;
+      diffused[startIndex] -= transfer;
+      diffused[endIndex] += transfer;
+    }
+    return diffused.map((level) => THREE.MathUtils.clamp(level, 0, 1));
+  };
+  const modifiedHeat = diffuseHeat(modifiedLocalHeat, 'effort');
+  const baselineHeat = diffuseHeat(baselineLocalHeat, 'baselineEffort');
+
+  state.trackers.forEach((tracker, index) => {
+    tracker.energyLevel = modifiedHeat[index];
+    tracker.baselineEnergyLevel = baselineHeat[index];
     energySurfaceUniforms.positions.value[index].copy(tracker.anchorPosition);
     energySurfaceUniforms.levels.value[index] = tracker.energyLevel;
+    no60OriginalEnergySurfaceUniforms.levels.value[index] = tracker.baselineEnergyLevel;
+    no60OriginalEnergySurfaceUniforms.positions.value[index].copy(
+      thermalSamples[index].originalTracker.anchorPosition
+    );
   });
 
   energySurfaceUniforms.bodyHeight.value = bodyHeight;
+  no60OriginalEnergySurfaceUniforms.bodyHeight.value = bodyHeight;
 }
 
-function updateCurveVisuals() {
-  const visuals = state.experimentVisuals.curves;
+function updateCurveVisuals(
+  visuals = state.experimentVisuals.curves,
+  trackers = state.trackers
+) {
   for (const [trackerId, item] of visuals.lines) {
     const { line, caps } = item;
-    const tracker = state.trackers.find((candidate) => candidate.definition.id === trackerId);
+    const tracker = trackers.find((candidate) => candidate.definition.id === trackerId);
     const history = tracker?.curveHistory ?? [];
     if (history.length < 3) {
       line.visible = false;
@@ -3270,8 +4652,7 @@ function updateCurveVisuals() {
   }
 }
 
-function updateAxisVisuals() {
-  const visuals = state.experimentVisuals.axes;
+function updateAxisVisuals(visuals = state.experimentVisuals.axes) {
   const itemCount = visuals.items.length;
   const parent = Array.from({ length: itemCount }, (_, index) => index);
   const findRoot = (index) => {
@@ -3349,8 +4730,7 @@ function updateAxisVisuals() {
   }
 }
 
-function updateSyncVisuals() {
-  const visuals = state.experimentVisuals.sync;
+function updateSyncVisuals(visuals = state.experimentVisuals.sync) {
   visuals.nodes.forEach((node) => {
     node.synchronyTotal = 0;
     node.relationshipCount = 0;
@@ -3416,14 +4796,30 @@ function updateSyncVisuals() {
   visuals.lines.geometry.attributes.instanceColorStart.data.needsUpdate = true;
 }
 
-function updateRelationVisuals(delta) {
-  const visuals = state.experimentVisuals.relations;
-  state.experimentFocusElapsed += delta;
-  if (!state.experimentFocusId || state.experimentFocusElapsed >= 0.34) {
-    const candidates = state.trackers.filter(
-      (tracker) => tracker.definition.id !== 'body' && tracker.definition.id !== 'head'
-    );
-    const focusTracker = candidates.reduce((current, tracker) => {
+function updateRelationVisuals(
+  delta,
+  visuals = state.experimentVisuals.relations,
+  trackers = state.trackers,
+  updateDescription = true,
+  preferredRegion = null
+) {
+  visuals.focusId ??= updateDescription ? state.experimentFocusId : null;
+  visuals.focusElapsed = (visuals.focusElapsed ?? 0) + delta;
+  if (!visuals.focusId || visuals.focusElapsed >= 0.5) {
+    const candidates = trackers.filter((tracker) => tracker.definition.id !== 'head');
+    const trackerRegion = (tracker) => {
+      const id = tracker.definition.id;
+      if (id === 'leftHand' || id === 'leftArm') return 'leftArm';
+      if (id === 'rightHand' || id === 'rightArm') return 'rightArm';
+      if (id === 'leftFoot' || id === 'leftLeg') return 'leftLeg';
+      if (id === 'rightFoot' || id === 'rightLeg') return 'rightLeg';
+      return id === 'body' ? 'torso' : 'whole';
+    };
+    const preferredCandidates = preferredRegion
+      ? candidates.filter((tracker) => trackerRegion(tracker) === preferredRegion)
+      : [];
+    const focusCandidates = preferredCandidates.length ? preferredCandidates : candidates;
+    const focusTracker = focusCandidates.reduce((current, tracker) => {
       const score = tracker.speed + Math.max(0, tracker.acceleration) * 0.035;
       const currentScore = current
         ? current.speed + Math.max(0, current.acceleration) * 0.035
@@ -3431,22 +4827,28 @@ function updateRelationVisuals(delta) {
       return score > currentScore ? tracker : current;
     }, null);
     const nextFocusId = focusTracker?.definition.id ?? null;
-    if (nextFocusId !== state.experimentFocusId) {
-      state.experimentFocusId = nextFocusId;
-      updateExperimentDescription();
+    if (nextFocusId !== visuals.focusId) {
+      visuals.focusId = nextFocusId;
+      if (updateDescription) {
+        state.experimentFocusId = nextFocusId;
+        updateExperimentDescription();
+      }
     }
-    state.experimentFocusElapsed = 0;
+    visuals.focusElapsed = 0;
   }
 
-  const head = state.trackers.find((tracker) => tracker.definition.id === 'head');
-  const focus = state.trackers.find((tracker) => tracker.definition.id === state.experimentFocusId);
+  const head = trackers.find((tracker) => tracker.definition.id === 'head');
+  const focus = trackers.find((tracker) => tracker.definition.id === visuals.focusId);
   if (!head || !focus) return;
+  visuals.displayFocusPosition ??= focus.anchorPosition.clone();
+  const focusPositionAlpha = 1 - Math.exp(-Math.max(1 / 240, delta) * 5.2);
+  visuals.displayFocusPosition.lerp(focus.anchorPosition, focusPositionAlpha);
   visuals.positions[0] = head.anchorPosition.x;
   visuals.positions[1] = head.anchorPosition.y;
   visuals.positions[2] = head.anchorPosition.z;
-  visuals.positions[3] = focus.anchorPosition.x;
-  visuals.positions[4] = focus.anchorPosition.y;
-  visuals.positions[5] = focus.anchorPosition.z;
+  visuals.positions[3] = visuals.displayFocusPosition.x;
+  visuals.positions[4] = visuals.displayFocusPosition.y;
+  visuals.positions[5] = visuals.displayFocusPosition.z;
   visuals.colors.set([
     EXPERIMENT_RED.r,
     EXPERIMENT_RED.g,
@@ -3459,14 +4861,31 @@ function updateRelationVisuals(delta) {
   visuals.beam.geometry.attributes.instanceColorStart.data.needsUpdate = true;
 
   const focusIntensity = THREE.MathUtils.clamp(focus.speed / 2.2 + Math.max(0, focus.acceleration) / 28, 0, 1);
+  visuals.displayFocusIntensity ??= focusIntensity;
+  const intensityAlpha = 1 - Math.exp(-Math.max(1 / 240, delta) * 6.5);
+  visuals.displayFocusIntensity = THREE.MathUtils.lerp(
+    visuals.displayFocusIntensity,
+    focusIntensity,
+    intensityAlpha
+  );
   visuals.beam.visible = true;
   visuals.beam.material.opacity = 1;
-  visuals.halo.position.copy(focus.anchorPosition);
+  visuals.halo.position.copy(visuals.displayFocusPosition);
   visuals.halo.quaternion.copy(camera.quaternion);
   visuals.halo.material.color.copy(EXPERIMENT_RED);
-  visuals.halo.scale.setScalar(0.8 + focusIntensity * 1.7);
-  visuals.core.position.copy(focus.anchorPosition);
+  visuals.halo.scale.setScalar(0.8 + visuals.displayFocusIntensity * 1.7);
+  visuals.core.position.copy(visuals.displayFocusPosition);
   visuals.core.material.color.copy(EXPERIMENT_RED);
+}
+
+function updateBodyModificationVisuals(visuals = state.experimentVisuals?.body) {
+  if (!visuals) return;
+  const pulse = 1 + Math.sin(state.experimentTime * 5.2) * 0.08;
+  for (const item of visuals.items) {
+    item.bone.getWorldPosition(item.marker.position);
+    item.marker.quaternion.copy(camera.quaternion);
+    item.marker.scale.setScalar(pulse);
+  }
 }
 
 function updateExperimentalVisuals(delta) {
@@ -3500,20 +4919,73 @@ function updateExperimentalVisuals(delta) {
     });
   }
   if (!state.experimentVisuals) return;
+  const modifiedSpaceIntensity = state.no60ModificationMode
+    ? (
+      resolveNo60ModificationValue(state.no60ModificationValues, 'space')
+      + resolveNo60ModificationValue(state.no60ModificationValues, 'space', ['arms'])
+      + resolveNo60ModificationValue(state.no60ModificationValues, 'space', ['legs'])
+    ) / 3
+    : 100;
   if (state.activeExperiments.has('energy')) updateEnergyVisuals(delta);
   if (state.activeExperiments.has('curves')) updateCurveVisuals();
   if (state.activeExperiments.has('axes')) updateAxisVisuals();
   if (state.activeExperiments.has('sync')) updateSyncVisuals();
   if (state.activeExperiments.has('space')) {
     updateExternalSpacePointCloud(state.experimentVisuals.space, {
+      root: state.root,
       bones: state.bones,
       trackers: state.trackers,
       time: state.experimentTime,
       pixelRatio: renderer.getPixelRatio(),
-      displayHeight: DISPLAY_HEIGHT
+      displayHeight: DISPLAY_HEIGHT,
+      intensity: modifiedSpaceIntensity
     });
   }
-  if (state.activeExperiments.has('relations')) updateRelationVisuals(delta);
+  if (state.activeExperiments.has('relations')) {
+    updateRelationVisuals(
+      delta,
+      state.experimentVisuals.relations,
+      state.trackers,
+      true,
+      state.no60ModificationMode
+        ? state.no60ModificationRuntime?.relationFocusRegion ?? null
+        : null
+    );
+  }
+  if (state.no60ModificationMode && no60ElementHasModification('body')) {
+    updateBodyModificationVisuals();
+  }
+  const originalVisuals = state.no60OriginalExperimentVisuals;
+  if (state.no60ModificationMode && originalVisuals) {
+    if (state.activeExperiments.has('curves')) {
+      updateCurveVisuals(originalVisuals.curves, state.no60OriginalTrackers);
+    }
+    if (state.activeExperiments.has('axes')) updateAxisVisuals(originalVisuals.axes);
+    if (state.activeExperiments.has('sync')) updateSyncVisuals(originalVisuals.sync);
+    if (state.activeExperiments.has('space')) {
+      updateExternalSpacePointCloud(originalVisuals.space, {
+        root: state.no60OriginalRoot,
+        bones: state.no60OriginalBones,
+        trackers: state.no60OriginalTrackers,
+        time: state.experimentTime,
+        pixelRatio: renderer.getPixelRatio(),
+        displayHeight: DISPLAY_HEIGHT,
+        intensity: 100
+      });
+    }
+    if (state.activeExperiments.has('relations')) {
+      updateRelationVisuals(
+        delta,
+        originalVisuals.relations,
+        state.no60OriginalTrackers,
+        false
+      );
+    }
+    if (no60ElementHasModification('body')) {
+      updateBodyModificationVisuals(originalVisuals.body);
+    }
+  }
+  applyNo60VisualizationVisibility();
 }
 
 function clearTrailGeometry(tracker) {
@@ -3673,9 +5145,13 @@ function getAveragePosition(objects, target) {
   return target.multiplyScalar(1 / objects.length);
 }
 
-function resetTrackerSamples({ preserveTrails = false } = {}) {
+function resetTrackerSamples({ preserveTrails = false, preserveEnergy = false } = {}) {
   state.sampleElapsed = 0;
   state.trailElapsed = 0;
+  if (!preserveEnergy) {
+    state.energyMotionIntensity = 0;
+    state.energyBaselineMotionIntensity = 0;
+  }
   state.root?.updateMatrixWorld(true);
   for (const tracker of state.trackers) {
     getAveragePosition(tracker.trackedBones, tracker.position);
@@ -3687,7 +5163,12 @@ function resetTrackerSamples({ preserveTrails = false } = {}) {
     tracker.speed = 0;
     tracker.previousSpeed = 0;
     tracker.acceleration = 0;
-    tracker.energyLevel = 0;
+    if (!preserveEnergy) {
+      tracker.energyLevel = 0;
+      tracker.baselineEnergyLevel = 0;
+      tracker.energyActivityMemory = 0;
+      tracker.baselineEnergyActivityMemory = 0;
+    }
     tracker.curveHistory.length = 0;
     tracker.curveHistory.push(tracker.anchorPosition.clone());
     tracker.coordinateOrigin.copy(tracker.anchorPosition);
@@ -3696,6 +5177,18 @@ function resetTrackerSamples({ preserveTrails = false } = {}) {
     if (!preserveTrails) clearTrailGeometry(tracker);
     else tracker.hasTrailPoint = false;
     appendTrailPoint(tracker, tracker.anchorPosition, false);
+  }
+  state.no60OriginalRoot?.updateMatrixWorld(true);
+  for (const tracker of state.no60OriginalTrackers) {
+    getAveragePosition(tracker.trackedBones, tracker.position);
+    tracker.anchorBone?.getWorldPosition(tracker.anchorPosition);
+    tracker.motionPreviousPosition.copy(tracker.anchorPosition);
+    tracker.velocity.set(0, 0, 0);
+    tracker.speed = 0;
+    tracker.previousSpeed = 0;
+    tracker.acceleration = 0;
+    tracker.curveHistory.length = 0;
+    tracker.curveHistory.push(tracker.anchorPosition.clone());
   }
 }
 
@@ -3717,6 +5210,7 @@ function applyAvatarScreenOffset() {
     && leftPanelVisible
     && interfaceVisible
     && wideLayout
+    && !state.no60ModificationMode
     && ui.viewerOptions
   ) {
     const sceneBounds = ui.sceneWrap.getBoundingClientRect();
@@ -3729,7 +5223,35 @@ function applyAvatarScreenOffset() {
   }
   const interfaceCenterShift = (leftInset - analysisInset) / 2;
   const screenX = (state.avatarOffsetX / 2.4) * width * 0.32 + interfaceCenterShift;
-  const screenY = (state.avatarOffsetY / 1.8) * height * 0.28;
+  let bottomPanelInset = 0;
+  const activeBottomPanel = state.no60ModificationPanelOpen
+    ? ui.no60ModificationPanel
+    : state.mixUpPanelOpen
+      ? ui.mixUpPanel
+      : state.sequenceTimelineOpen
+        ? ui.sequenceTimelinePanel
+        : null;
+  if (
+    !EMBEDDED_VIEW
+    && activeBottomPanel
+    && interfaceVisible
+    && (
+      !document.body.classList.contains('controls-hidden')
+      || activeBottomPanel === ui.no60ModificationPanel
+    )
+  ) {
+    const sceneBounds = ui.sceneWrap.getBoundingClientRect();
+    const panelBounds = activeBottomPanel.getBoundingClientRect();
+    if (panelBounds.height > 0) {
+      bottomPanelInset = THREE.MathUtils.clamp(
+        sceneBounds.bottom - panelBounds.top,
+        0,
+        height * 0.82
+      );
+    }
+  }
+  const bottomPanelCenterShift = bottomPanelInset / 2;
+  const screenY = (state.avatarOffsetY / 1.8) * height * 0.28 + bottomPanelCenterShift;
 
   if (Math.abs(screenX) < 0.01 && Math.abs(screenY) < 0.01) {
     camera.clearViewOffset();
@@ -3798,6 +5320,21 @@ function updateAxisWidget() {
   }
 }
 
+function updateNo60ComparisonOverlay() {
+  if (!state.no60ModificationMode || !ui.no60ComparisonOverlay || ui.no60ComparisonOverlay.hidden) return;
+  const originalAnchor = state.no60OriginalBones.get('Head') ?? state.no60OriginalBones.get('Hips');
+  const modifiedAnchor = state.bones.get('Head') ?? state.bones.get('Hips');
+  if (!originalAnchor || !modifiedAnchor) return;
+  const width = Math.max(1, ui.sceneWrap.clientWidth);
+  originalAnchor.getWorldPosition(tempVector).project(camera);
+  modifiedAnchor.getWorldPosition(tempVectorB).project(camera);
+  const originalX = THREE.MathUtils.clamp((tempVector.x * 0.5 + 0.5) * width, 48, width - 48);
+  const modifiedX = THREE.MathUtils.clamp((tempVectorB.x * 0.5 + 0.5) * width, 48, width - 48);
+  ui.no60ComparisonOverlay.style.setProperty('--no60-original-label-x', `${originalX}px`);
+  ui.no60ComparisonOverlay.style.setProperty('--no60-modified-label-x', `${modifiedX}px`);
+  ui.no60ComparisonOverlay.style.setProperty('--no60-divider-x', `${(originalX + modifiedX) / 2}px`);
+}
+
 function fitCamera() {
   if (EMBEDDED_VIEW) {
     const centerY = getEmbeddedAvatarCenterY();
@@ -3806,7 +5343,10 @@ function fitCamera() {
     controls.target.set(state.avatarOffsetX, centerY, 0);
   } else {
     const centerY = 1.48 + state.avatarOffsetY;
-    camera.position.copy(DEFAULT_CAMERA_OFFSET)
+    const cameraOffset = state.no60ModificationMode
+      ? NO60_COMPARISON_CAMERA_OFFSET
+      : DEFAULT_CAMERA_OFFSET;
+    camera.position.copy(cameraOffset)
       .add(new THREE.Vector3(state.avatarOffsetX, centerY, 0));
     controls.target.set(state.avatarOffsetX, 1.48 + state.avatarOffsetY, 0);
   }
@@ -3814,15 +5354,91 @@ function fitCamera() {
   applyAvatarScreenOffset();
 }
 
-function centerCharacter() {
-  if (!state.bodyCenterLocked) return;
-  const hips = state.bones.get('Hips');
-  if (!state.root || !hips) return;
-  state.root.updateMatrixWorld(true);
+function centerRootAtWorldX(root, bones, targetX) {
+  const hips = bones.get('Hips');
+  if (!root || !hips) return;
+  root.updateMatrixWorld(true);
   hips.getWorldPosition(tempVector);
-  state.root.position.x += state.avatarOffsetX - tempVector.x;
-  state.root.position.z -= tempVector.z;
-  state.root.updateMatrixWorld(true);
+  root.position.x += targetX - tempVector.x;
+  root.position.z -= tempVector.z;
+  root.updateMatrixWorld(true);
+}
+
+function centerCharacter() {
+  const comparisonActive = state.no60ModificationMode && !EMBEDDED_VIEW;
+  if (!state.bodyCenterLocked && !comparisonActive) return;
+  const targetX = state.avatarOffsetX + (comparisonActive ? NO60_COMPARISON_SEPARATION : 0);
+  centerRootAtWorldX(state.root, state.bones, targetX);
+  if (comparisonActive) {
+    centerRootAtWorldX(
+      state.no60OriginalRoot,
+      state.no60OriginalBones,
+      state.avatarOffsetX - NO60_COMPARISON_SEPARATION
+    );
+  }
+}
+
+function cloneNo60ReferenceMaterials(root) {
+  root.traverse((child) => {
+    if (!child.isMesh) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    const clones = materials.map((source) => {
+      const material = source.clone();
+      material.onBeforeCompile = () => {};
+      installEnergySurfaceShader(
+        material,
+        no60OriginalEnergySurfaceUniforms,
+        'cyber-subin-no60-reference-energy-v2'
+      );
+      material.needsUpdate = true;
+      return material;
+    });
+    child.material = Array.isArray(child.material) ? clones : clones[0];
+  });
+}
+
+function setupNo60ModificationComparison() {
+  if (!state.no60ModificationMode || !state.root || !state.clip) return;
+  if (EMBEDDED_VIEW) {
+    state.no60ModificationRuntime = createNo60ModificationRuntime(
+      state.root,
+      state.clip,
+      state.clipStart
+    );
+    if (ui.no60ComparisonOverlay) ui.no60ComparisonOverlay.hidden = true;
+    refreshNo60ModifiedPose();
+    return;
+  }
+  clearNo60ComparisonClone();
+  const originalRoot = cloneSkeleton(state.root);
+  cloneNo60ReferenceMaterials(originalRoot);
+  const originalContainer = new THREE.Group();
+  originalContainer.name = 'CyberSubinNO60Original';
+  originalContainer.position.copy(state.modelContainer?.position ?? new THREE.Vector3());
+  originalContainer.add(originalRoot);
+  scene.add(originalContainer);
+
+  const originalMixer = new THREE.AnimationMixer(originalRoot);
+  const originalAction = originalMixer.clipAction(state.clip);
+  originalAction.setLoop(THREE.LoopRepeat, Infinity);
+  originalAction.play();
+  originalAction.time = state.action?.time ?? state.clipStart;
+  originalMixer.update(0);
+
+  state.no60OriginalRoot = originalRoot;
+  state.no60OriginalContainer = originalContainer;
+  state.no60OriginalMixer = originalMixer;
+  state.no60OriginalAction = originalAction;
+  state.no60OriginalBones = indexBones(originalRoot);
+  state.no60ModificationRuntime = createNo60ModificationRuntime(
+    state.root,
+    state.clip,
+    state.clipStart
+  );
+  if (ui.no60ComparisonOverlay) ui.no60ComparisonOverlay.hidden = false;
+  centerCharacter();
+  refreshNo60ModifiedPose();
+  createNo60OriginalTrackers();
 }
 
 function prepareModel(gltf, movement) {
@@ -3860,6 +5476,7 @@ function prepareModel(gltf, movement) {
   centerCharacter();
   createAvatarRepresentations(root);
   applyAvatarAppearance();
+  if (state.no60ModificationMode) setupNo60ModificationComparison();
   createTrackers();
   resetTrackerSamples();
   createExperimentalVisuals();
@@ -3893,7 +5510,9 @@ function prepareModel(gltf, movement) {
   hideLoading();
 
   const firstSequenceMovement = getSequenceMovement(state.sequence[0]);
-  if (state.sequenceActive && firstSequenceMovement?.id === movement.id) {
+  if (state.mixUpActive && !state.mixUpPreparing) {
+    void initializeMixUpPlayback();
+  } else if (state.sequenceActive && firstSequenceMovement?.id === movement.id) {
     void initializeSequencePlayback();
   }
 
@@ -3965,6 +5584,15 @@ function formatTime(seconds) {
 }
 
 function getPlaybackTiming() {
+  if (state.mixUpActive && state.mixUpReady) {
+    const duration = Math.max(0.001, state.mixUpDuration);
+    const currentTime = THREE.MathUtils.euclideanModulo(state.mixUpElapsed, duration);
+    return {
+      currentTime,
+      duration,
+      progress: currentTime / duration
+    };
+  }
   if (state.sequenceActive && state.sequenceReady) {
     const duration = getSequenceTotalDuration();
     const currentTime = THREE.MathUtils.clamp(getSequenceElapsedTime(), 0, duration);
@@ -3984,6 +5612,11 @@ function getPlaybackTiming() {
 }
 
 function setPlaying(playing) {
+  if (playing && state.sequenceEnded && !state.sequenceActive && state.sequence.length) {
+    state.sequenceResumePlaying = true;
+    startSequence();
+    return;
+  }
   if (playing && state.sequenceEnded && state.sequenceActive && state.sequenceReady) {
     setSequenceRuntime(0, 0, { preserveTrails: true });
   }
@@ -4010,6 +5643,19 @@ function setPlaybackSpeed(speed) {
 }
 
 function seekToProgress(progress) {
+  if (state.mixUpActive) {
+    const normalizedProgress = THREE.MathUtils.clamp(Number(progress) || 0, 0, 1);
+    if (!state.mixUpReady || !state.mixer) return;
+    state.mixUpElapsed = state.mixUpDuration * normalizedProgress;
+    state.mixUpActions.forEach((entry) => {
+      entry.action.time = THREE.MathUtils.euclideanModulo(state.mixUpElapsed, entry.clip.duration);
+    });
+    state.mixer.update(0);
+    centerCharacter();
+    resetTrackerSamples({ preserveTrails: true });
+    updateMotionSignals(1 / 30, false, false);
+    return;
+  }
   if (state.sequenceActive) {
     const normalizedProgress = THREE.MathUtils.clamp(Number(progress) || 0, 0, 1);
     if (!state.sequenceReady) {
@@ -4025,6 +5671,9 @@ function seekToProgress(progress) {
   state.action.time = state.clipStart + playableDuration * normalizedProgress;
   state.mixer.update(0);
   state.lastClipTime = state.action.time;
+  if (state.no60ModificationMode) {
+    refreshNo60ModifiedPose(1 / 60, { syncOriginal: true });
+  }
   centerCharacter();
   resetTrackerSamples({ preserveTrails: true });
   updateMotionSignals(1 / 30, false, false);
@@ -4390,13 +6039,25 @@ function setGraphMode(mode, activeButton) {
 }
 
 function resetExperience() {
-  if (state.sequenceActive && state.sequenceReady) {
+  if (state.mixUpActive && state.mixUpReady) {
+    state.mixUpElapsed = 0;
+    state.mixUpActions.forEach((entry) => {
+      entry.action.reset().play();
+      entry.action.time = 0;
+    });
+    state.mixer.update(0);
+    centerCharacter();
+    resetTrackerSamples();
+  } else if (state.sequenceActive && state.sequenceReady) {
     setSequenceRuntime(0, 0);
   } else if (state.action) {
     state.action.reset().play();
     state.action.time = state.clipStart;
     state.mixer.update(0);
     state.lastClipTime = state.clipStart;
+    if (state.no60ModificationMode) {
+      refreshNo60ModifiedPose(1 / 60, { syncOriginal: true });
+    }
     centerCharacter();
     resetTrackerSamples();
   }
@@ -4428,6 +6089,27 @@ function updateJointGeometry() {
   ui.elbowAngle.textContent = elbow == null ? '—°' : `${Math.round(elbow)}°`;
   ui.kneeAngle.textContent = knee == null ? '—°' : `${Math.round(knee)}°`;
   ui.torsoAngle.textContent = torsoLean == null ? '—°' : `${Math.round(torsoLean)}°`;
+}
+
+function updateNo60OriginalMotionSignals(motionDelta) {
+  if (!state.no60ModificationMode || !state.no60OriginalRoot) return;
+  state.no60OriginalRoot.updateMatrixWorld(true);
+  for (const tracker of state.no60OriginalTrackers) {
+    getAveragePosition(tracker.trackedBones, tracker.position);
+    tracker.anchorBone?.getWorldPosition(tracker.anchorPosition);
+    tracker.velocity
+      .subVectors(tracker.anchorPosition, tracker.motionPreviousPosition)
+      .divideScalar(motionDelta);
+    tracker.speed = tracker.velocity.length();
+    tracker.acceleration = (tracker.speed - tracker.previousSpeed) / motionDelta;
+    tracker.previousSpeed = tracker.speed;
+    tracker.motionPreviousPosition.copy(tracker.anchorPosition);
+    const lastCurvePoint = tracker.curveHistory.at(-1);
+    if (!lastCurvePoint || lastCurvePoint.distanceToSquared(tracker.anchorPosition) > 0.000016) {
+      tracker.curveHistory.push(tracker.anchorPosition.clone());
+      if (tracker.curveHistory.length > CURVE_HISTORY_LENGTH) tracker.curveHistory.shift();
+    }
+  }
 }
 
 function updateMotionSignals(delta, shouldSample, trailSampling = null) {
@@ -4488,6 +6170,8 @@ function updateMotionSignals(delta, shouldSample, trailSampling = null) {
       row.querySelector('[data-axis-value="average"]').textContent = `${displayAverage >= 0 ? '+' : ''}${displayAverage.toFixed(3)}`;
     }
   }
+
+  updateNo60OriginalMotionSignals(motionDelta);
 
   if (!EMBEDDED_VIEW) updateJointGeometry();
   if (EMBEDDED_VIEW) {
@@ -4566,7 +6250,7 @@ function updateTransport() {
   ui.currentTime.textContent = formatTime(timing.currentTime);
   ui.totalTime.textContent = formatTime(timing.duration);
   if (!ui.timeline.matches(':active')) {
-    ui.timeline.value = state.sequenceActive && state.sequenceReady
+    ui.timeline.value = (state.sequenceActive && state.sequenceReady) || (state.mixUpActive && state.mixUpReady)
       ? String(timing.currentTime)
       : String(state.action?.time ?? state.clipStart);
   }
@@ -4595,11 +6279,28 @@ function animate() {
   const rawDelta = Math.min(clock.getDelta(), 0.08);
 
   if (state.ready && state.mixer && state.action && state.playing) {
+    const baseFrameDelta = rawDelta * state.speed;
+    const energyPlaybackRate = state.no60ModificationMode
+      ? getNo60EnergyPlaybackRate(state.no60ModificationValues)
+      : 1;
+    const modifiedFrameDelta = baseFrameDelta * energyPlaybackRate;
     let looped = false;
-    if (state.sequenceActive && state.sequenceReady) {
-      looped = advanceSequencePlayback(rawDelta * state.speed);
+    if (state.mixUpActive && state.mixUpReady) {
+      const previousElapsed = state.mixUpElapsed;
+      const frameDelta = modifiedFrameDelta;
+      state.mixer.update(frameDelta);
+      state.mixUpElapsed += frameDelta;
+      if (state.mixUpDuration > 0) {
+        looped = Math.floor(previousElapsed / state.mixUpDuration)
+          !== Math.floor(state.mixUpElapsed / state.mixUpDuration);
+        if (state.mixUpElapsed > state.mixUpDuration * 1000) {
+          state.mixUpElapsed = THREE.MathUtils.euclideanModulo(state.mixUpElapsed, state.mixUpDuration);
+        }
+      }
+    } else if (state.sequenceActive && state.sequenceReady) {
+      looped = advanceSequencePlayback(modifiedFrameDelta);
     } else {
-      state.mixer.update(rawDelta * state.speed);
+      state.mixer.update(modifiedFrameDelta);
       const clipTime = state.action.time;
       looped = clipTime + 0.03 < state.lastClipTime;
       if (looped) {
@@ -4610,8 +6311,14 @@ function animate() {
         state.lastClipTime = clipTime;
       }
     }
+    if (state.no60ModificationMode) {
+      advanceNo60OriginalReference(baseFrameDelta);
+      refreshNo60ModifiedPose(baseFrameDelta, { advanceEnergy: true });
+    }
     centerCharacter();
-    if (looped && !(state.sequenceActive && state.sequenceReady)) resetTrackerSamples();
+    if (looped && !(state.sequenceActive && state.sequenceReady) && !state.mixUpActive) {
+      resetTrackerSamples({ preserveEnergy: true });
+    }
 
     if (!EMBEDDED_VIEW) state.sampleElapsed += rawDelta;
     const trailElapsedBeforeFrame = state.trailElapsed;
@@ -4625,7 +6332,7 @@ function animate() {
       state.sampleElapsed = 0;
     }
     if (trailSampleCount > 0) state.trailElapsed %= trailInterval;
-    updateMotionSignals(rawDelta * state.speed, shouldSample, trailSampleCount > 0 ? {
+    updateMotionSignals(baseFrameDelta, shouldSample, trailSampleCount > 0 ? {
       count: trailSampleCount,
       interval: trailInterval,
       elapsedBeforeFrame: trailElapsedBeforeFrame,
@@ -4636,6 +6343,7 @@ function animate() {
   }
 
   controls.update(rawDelta);
+  updateNo60ComparisonOverlay();
   updateAxisWidget();
   if (!EMBEDDED_VIEW && state.ready) {
     shareUrlElapsed += rawDelta;
@@ -4671,7 +6379,67 @@ ui.sequencePlay.addEventListener('click', () => {
     startSequence();
   }
 });
+ui.sequenceRandomFive.addEventListener('click', createRandomFiveSequence);
 ui.sequenceClear.addEventListener('click', clearSequence);
+ui.mixUpToggle.addEventListener('click', () => setMixUpPanelOpen(!state.mixUpPanelOpen));
+ui.mixUpClose.addEventListener('click', () => setMixUpPanelOpen(false));
+ui.mixUpPlay.addEventListener('click', () => {
+  if (state.mixUpActive) stopMixUp();
+  else startMixUp();
+});
+ui.mixUpReset.addEventListener('click', resetMixUp);
+ui.mixUpMethodButtons.forEach((button) => {
+  button.addEventListener('click', () => randomizeMixUp(button.dataset.mixUpMethod));
+});
+ui.mixUpSourceGrid.addEventListener('change', (event) => {
+  const select = event.target.closest('[data-mix-up-source]');
+  if (!select) return;
+  setMixUpSource(select.dataset.mixUpSource, select.value);
+});
+ui.no60ModificationToggle?.addEventListener('click', () => {
+  setNo60ModificationMode(!state.no60ModificationMode);
+});
+ui.no60ModificationClose?.addEventListener('click', () => setNo60ModificationMode(false));
+ui.no60ModificationRandom?.addEventListener('click', randomizeNo60Modification);
+ui.no60ModificationReset?.addEventListener('click', resetNo60Modification);
+ui.no60ModificationResizer?.addEventListener('pointerdown', beginNo60PanelDrag);
+ui.no60ModificationResizer?.addEventListener('pointermove', moveNo60Panel);
+ui.no60ModificationResizer?.addEventListener('pointerup', endNo60PanelDrag);
+ui.no60ModificationResizer?.addEventListener('pointercancel', endNo60PanelDrag);
+ui.no60ModificationResizer?.addEventListener('dblclick', toggleNo60PanelCollapsed);
+ui.no60ModificationResizer?.addEventListener('keydown', handleNo60PanelResizeKey);
+ui.no60ModificationControls?.addEventListener('input', (event) => {
+  const masterInput = event.target.closest('[data-no60-master]');
+  if (masterInput) {
+    setNo60ModificationMaster(masterInput.dataset.no60Master, masterInput.value);
+    return;
+  }
+  const input = event.target.closest('[data-no60-value]');
+  if (input) setNo60ModificationValue(input.dataset.no60Value, input.value);
+});
+ui.no60ModificationControls?.addEventListener('click', (event) => {
+  const resetButton = event.target.closest('[data-no60-reset]');
+  if (resetButton) {
+    resetNo60ModificationElement(resetButton.dataset.no60Reset);
+    return;
+  }
+  const infoButton = event.target.closest('[data-no60-info]');
+  if (infoButton) {
+    showNo60ModificationInfo(infoButton.dataset.no60Info);
+    return;
+  }
+  const axisButton = event.target.closest('[data-no60-axis]');
+  if (axisButton) {
+    setNo60ModificationAxis(axisButton.dataset.no60Axis);
+    return;
+  }
+  const visualButton = event.target.closest('[data-no60-visual]');
+  if (visualButton) {
+    const [elementId, target] = visualButton.dataset.no60Visual.split('.');
+    setNo60VisualizationTarget(elementId, target);
+  }
+});
+ui.no60ModificationInfoClose?.addEventListener('click', hideNo60ModificationInfo);
 ui.applySequenceSpeedAll.addEventListener('click', applyPlaybackSpeedToAllSequenceEntries);
 for (const button of ui.sequenceDurationButtons) {
   button.addEventListener('click', () => setSequenceTransitionDuration(button.dataset.sequenceDuration));
@@ -4748,17 +6516,10 @@ ui.flowFieldResetButton.addEventListener('click', resetFlowFieldParticles);
 
 ui.timeline.addEventListener('input', () => {
   if (!state.action || !state.mixer) return;
-  if (state.sequenceActive) {
-    const totalDuration = getSequenceTotalDuration();
-    seekSequenceToProgress(totalDuration ? Number(ui.timeline.value) / totalDuration : 0);
-    return;
-  }
-  state.action.time = Number(ui.timeline.value);
-  state.mixer.update(0);
-  state.lastClipTime = state.action.time;
-  centerCharacter();
-  resetTrackerSamples({ preserveTrails: true });
-  updateMotionSignals(1 / 30, false, false);
+  const minimum = Number(ui.timeline.min) || 0;
+  const maximum = Number(ui.timeline.max) || 1;
+  const progress = (Number(ui.timeline.value) - minimum) / Math.max(0.0001, maximum - minimum);
+  seekToProgress(progress);
 });
 
 for (const button of ui.speedButtons) {
@@ -4850,6 +6611,13 @@ for (const button of ui.traceVisibilityButtons) {
 ui.lineDisplayToggle.addEventListener('click', () => setTraceVisibility(!state.traceVisible));
 ui.bodyPointsToggle.addEventListener('click', () => setBodyPointsVisibility(!state.bodyPointsVisible));
 ui.bodyCenteringToggle.addEventListener('click', () => setBodyCenterLocked(!state.bodyCenterLocked));
+ui.physicsConstantsToggle.addEventListener('click', () => setPhysicsConstantsOpen(!state.physicsConstantsOpen));
+ui.physicsConstantsClose.addEventListener('click', () => setPhysicsConstantsOpen(false));
+ui.physicsConstantsReset.addEventListener('click', resetPhysicsConstants);
+
+for (const input of ui.physicsConstantInputs) {
+  input.addEventListener('input', () => setPhysicsConstant(input.dataset.physicsConstant, input.value));
+}
 
 for (const button of ui.traceDotButtons) {
   button.addEventListener('click', () => setTraceDots(button.dataset.traceDots === 'true', button));
@@ -4985,6 +6753,7 @@ window.addEventListener('keydown', (event) => {
 
 window.addEventListener('resize', () => {
   setAnalysisWidth(state.analysisWidth);
+  setNo60PanelHeight(state.no60PanelHeight);
   resize();
 });
 new ResizeObserver(resize).observe(ui.sceneWrap);
@@ -5026,8 +6795,15 @@ setFlowFieldMenu(false);
 setTraceVisibility(false);
 setBodyPointsVisibility(false);
 setBodyCenterLocked(true);
+applyPhysicsConstants(createDefaultPhysicsConstants());
+setPhysicsConstantsOpen(false);
 renderSequenceTimeline();
 setSequenceTimelineOpen(false);
+renderMixUpPanel();
+setMixUpPanelOpen(false);
+buildNo60ModificationControls();
+updateNo60ModificationUi();
+if (ui.no60ModificationPanel) ui.no60ModificationPanel.hidden = true;
 setAnalysisWidth(390);
 setAnalysisVisibility(true);
 fitCamera();

@@ -289,6 +289,8 @@ export function createFlowField({ maxParticles = 7200 } = {}) {
     influence: 1,
     bodyFlow: 1,
     recovery: 1,
+    velocityDamping: 1,
+    momentumDiffusivity: 1,
     proximityFade: 1,
     concentration: 1,
     opacity: 1,
@@ -364,6 +366,12 @@ export function setFlowFieldOptions(field, options = {}) {
   if (Number.isFinite(Number(options.recovery))) {
     field.recovery = THREE.MathUtils.clamp(Number(options.recovery), 0.05, 8);
   }
+  if (Number.isFinite(Number(options.velocityDamping))) {
+    field.velocityDamping = THREE.MathUtils.clamp(Number(options.velocityDamping), 0.25, 3);
+  }
+  if (Number.isFinite(Number(options.momentumDiffusivity))) {
+    field.momentumDiffusivity = THREE.MathUtils.clamp(Number(options.momentumDiffusivity), 0, 3);
+  }
   if (Number.isFinite(Number(options.proximityFade))) {
     field.proximityFade = THREE.MathUtils.clamp(Number(options.proximityFade), 0, 4);
     field.strokes.material.uniforms.proximityFade.value = field.proximityFade;
@@ -401,9 +409,11 @@ function advanceFluidGrid(
 ) {
   const current = field.fluidVelocity;
   const next = field.fluidScratch;
-  const decay = Math.exp(-frameDelta * (0.08 + field.recovery * 0.2));
+  const decay = Math.exp(
+    -frameDelta * (0.08 + field.recovery * 0.2) * field.velocityDamping
+  );
   const diffusion = THREE.MathUtils.clamp(
-    frameDelta * (0.7 + field.curvature * 0.22),
+    frameDelta * (0.7 + field.curvature * 0.22) * field.momentumDiffusivity,
     0,
     0.11
   );

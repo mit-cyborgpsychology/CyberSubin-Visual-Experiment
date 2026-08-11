@@ -19,7 +19,13 @@ const STRING_PARAMETERS = [
   'sequenceTransitionDurations',
   'sequenceTransitionEasings',
   'sequencePlaybackSpeeds',
-  'sequenceLoopMode'
+  'sequenceLoopMode',
+  'mixUpSources',
+  'mixUpMode',
+  'no60ModificationValues',
+  'no60ModificationMasters',
+  'no60VisualizationTargets',
+  'physicsConstants'
 ];
 
 const NUMBER_PARAMETERS = [
@@ -64,6 +70,11 @@ const BOOLEAN_PARAMETERS = [
   'flowFieldMenuOpen',
   'sequenceActive',
   'sequenceTimelineOpen',
+  'mixUpActive',
+  'mixUpPanelOpen',
+  'no60ModificationMode',
+  'no60ModificationPanelOpen',
+  'physicsConstantsOpen',
   'controlsHidden',
   'interfaceHidden'
 ];

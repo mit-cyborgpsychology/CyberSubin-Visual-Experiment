@@ -405,6 +405,7 @@ const cells = Array.from({ length: 6 }, (_, index) => {
     const experiments = experimentsForEffect(effectSelect.value);
     cell.viewState = { ...(cell.viewState ?? {}), experiments };
     sendCommand(cell, 'effect', effectSelect.value);
+    saveGridState();
   });
   applyStyleButton.addEventListener('click', () => applyCellStyleToAll(index));
   applySequenceButton.addEventListener('click', () => applyCellSequenceToAll(index));
@@ -455,6 +456,7 @@ function distributeNo60Elements() {
     sendCommand(cell, 'effect', effect);
   });
   ui.globalEffect.value = DEFAULT_EFFECTS[0];
+  saveGridState();
 }
 
 function applyCellStyleToAll(sourceIndex) {
@@ -485,6 +487,10 @@ function applyCellStyleToAll(sourceIndex) {
       ...structuredClone(sourceStyle),
       experiments: [...experiments]
     };
+    if (cell.viewState.no60ModificationMode) cell.viewState.no60ModificationPanelOpen = false;
+    if (cell.card.classList.contains('ready')) {
+      cell.stateLabel.textContent = cell.viewState.no60ModificationMode ? 'LIVE · MOD' : 'LIVE';
+    }
     sendCommand(cell, 'viewState', cell.viewState);
   });
 
@@ -630,6 +636,7 @@ ui.applyEffectAll.addEventListener('click', () => {
     cell.viewState = { ...(cell.viewState ?? {}), experiments: experimentsForEffect(ui.globalEffect.value) };
     sendCommand(cell, 'effect', ui.globalEffect.value);
   }
+  saveGridState();
 });
 
 ui.distributeEffects.addEventListener('click', distributeNo60Elements);
@@ -694,11 +701,12 @@ window.addEventListener('message', (event) => {
 
   if (event.data.type !== 'ready') return;
   cell.card.classList.add('ready');
-  cell.stateLabel.textContent = 'LIVE';
   cell.applyStyleButton.disabled = false;
   if (!cell.viewState && event.data.viewState && typeof event.data.viewState === 'object') {
     cell.viewState = structuredClone(event.data.viewState);
   }
+  if (cell.viewState?.no60ModificationMode) cell.viewState.no60ModificationPanelOpen = false;
+  cell.stateLabel.textContent = cell.viewState?.no60ModificationMode ? 'LIVE · MOD' : 'LIVE';
   if (cell.viewState) sendCommand(cell, 'viewState', cell.viewState);
   updateCellSequenceButton(cell);
 

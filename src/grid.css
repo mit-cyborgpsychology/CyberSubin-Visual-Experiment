@@ -75,7 +75,7 @@ a:focus-visible {
   padding: 0 24px;
 }
 
-.grid-brand strong { font-size: 20px; letter-spacing: 0.16em; }
+.grid-brand strong { font-size: 16px; letter-spacing: 0.12em; }
 
 .view-switcher {
   height: 100%;

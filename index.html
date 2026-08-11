@@ -7,14 +7,14 @@
       name="description"
       content="An interactive 3D motion atlas for 59 indexed Thai traditional dance movements."
     />
-    <title>Cyber Subin — Motion Atlas</title>
+    <title>Cyber Subin 2.0 Lab</title>
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="/" aria-label="Cyber Subin home">
+        <a class="brand" href="/" aria-label="Cyber Subin 2.0 Lab home">
           <span class="brand-copy">
-            <strong>CYBER SUBIN</strong>
+            <strong>CYBER SUBIN 2.0 LAB</strong>
           </span>
         </a>
 
@@ -51,6 +51,12 @@
         <section class="viewer-panel" aria-label="Interactive 3D movement viewer">
           <div id="scene-wrap" class="scene-wrap">
             <canvas id="three-canvas"></canvas>
+
+            <div id="no60-comparison-overlay" class="no60-comparison-overlay" aria-hidden="true" hidden>
+              <span>ORIGINAL</span>
+              <i></i>
+              <span>MODIFIED</span>
+            </div>
 
             <div class="loading-state" id="loading-state" role="status" aria-live="polite">
               <div class="loading-orbit"><span></span><span></span></div>
@@ -303,6 +309,72 @@
                 </button>
               </section>
 
+              <section class="control-section control-section--physics" aria-label="Physics constants">
+                <button
+                  id="physics-constants-toggle"
+                  class="control-section-toggle physics-constants-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="physics-constants-panel"
+                >
+                  <span>PHYSICS CONSTANTS</span><strong id="physics-constants-status">SHOW</strong>
+                </button>
+                <div id="physics-constants-panel" class="control-section-panel physics-constants-panel" hidden>
+                  <div class="menu-panel-header">
+                    <span>PHYSICS CONSTANTS</span>
+                    <button id="physics-constants-close" class="menu-panel-close" type="button" aria-label="Close Physics Constants">×</button>
+                  </div>
+                  <p class="physics-constants-intro">
+                    NORMALIZED SIMULATION COEFFICIENTS · 1× IS THE CALIBRATED BASELINE
+                  </p>
+                  <div class="physics-constants-grid">
+                    <label class="flow-slider-group physics-constant-group" for="physics-heat-deposition-rate">
+                      <span>HEAT DEPOSITION RATE <output data-physics-value="heatDepositionRate">1.15×</output></span>
+                      <small>Movement energy converted to local heat.</small>
+                      <input id="physics-heat-deposition-rate" data-physics-constant="heatDepositionRate" type="range" min="0.25" max="2.5" step="0.05" value="1.15">
+                    </label>
+                    <label class="flow-slider-group physics-constant-group" for="physics-thermal-dissipation-rate">
+                      <span>THERMAL DISSIPATION RATE <output data-physics-value="thermalDissipationRate">1.00×</output></span>
+                      <small>Stored heat lost to the environment.</small>
+                      <input id="physics-thermal-dissipation-rate" data-physics-constant="thermalDissipationRate" type="range" min="0.25" max="2.5" step="0.05" value="1">
+                    </label>
+                    <label class="flow-slider-group physics-constant-group" for="physics-thermal-diffusivity">
+                      <span>THERMAL DIFFUSIVITY <output data-physics-value="thermalDiffusivity">1.00×</output></span>
+                      <small>Heat transfer between body regions.</small>
+                      <input id="physics-thermal-diffusivity" data-physics-constant="thermalDiffusivity" type="range" min="0" max="3" step="0.05" value="1">
+                    </label>
+                    <label class="flow-slider-group physics-constant-group" for="physics-activity-memory-persistence">
+                      <span>ACTIVITY-MEMORY PERSISTENCE <output data-physics-value="activityMemoryPersistence">1.00×</output></span>
+                      <small>Retention created by repeated movement.</small>
+                      <input id="physics-activity-memory-persistence" data-physics-constant="activityMemoryPersistence" type="range" min="0.25" max="3" step="0.05" value="1">
+                    </label>
+                    <label class="flow-slider-group physics-constant-group" for="physics-flow-velocity-damping">
+                      <span>FLOW VELOCITY DAMPING <output data-physics-value="flowVelocityDamping">1.00×</output></span>
+                      <small>Residual flow-field momentum loss.</small>
+                      <input id="physics-flow-velocity-damping" data-physics-constant="flowVelocityDamping" type="range" min="0.25" max="3" step="0.05" value="1">
+                    </label>
+                    <label class="flow-slider-group physics-constant-group" for="physics-flow-momentum-diffusivity">
+                      <span>FLOW MOMENTUM DIFFUSIVITY <output data-physics-value="flowMomentumDiffusivity">1.00×</output></span>
+                      <small>Turbulent momentum spread through the field.</small>
+                      <input id="physics-flow-momentum-diffusivity" data-physics-constant="flowMomentumDiffusivity" type="range" min="0" max="3" step="0.05" value="1">
+                    </label>
+                  </div>
+                  <button id="physics-constants-reset" class="physics-constants-reset" type="button">RESET CONSTANTS</button>
+                </div>
+              </section>
+
+              <section class="control-section control-section--mix-up" aria-label="Mix-up movement controls">
+                <button
+                  id="mix-up-toggle"
+                  class="control-section-toggle mix-up-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="mix-up-panel"
+                >
+                  <span>MIX-UP</span><strong id="mix-up-toggle-status">SHOW</strong>
+                </button>
+              </section>
+
               <div id="effect-menu-slot" class="effect-menu-slot"></div>
 
               <section class="control-section control-section--sequence" aria-label="Sequence timeline display">
@@ -339,12 +411,12 @@
                   aria-expanded="false"
                   aria-controls="visualization-menu-panel"
                 >
-                  <span>No. 60 ELEMENTS</span><strong id="visualization-menu-status">SHOW</strong>
+                  <span>NO.60 ELEMENTS</span><strong id="visualization-menu-status">SHOW</strong>
                 </button>
                 <div id="visualization-menu-panel" class="visualization-menu-panel" hidden>
                   <div class="menu-panel-header">
-                    <span>No. 60 ELEMENTS</span>
-                    <button id="visualization-menu-close" class="menu-panel-close" type="button" aria-label="Close No. 60 Elements">×</button>
+                    <span>NO.60 ELEMENTS</span>
+                    <button id="visualization-menu-close" class="menu-panel-close" type="button" aria-label="Close NO.60 Elements">×</button>
                   </div>
                   <div class="experiment-control option-grid--two" aria-label="Movement visualization lenses">
                     <span>MOVEMENT LENS</span>
@@ -361,6 +433,18 @@
                     MOVEMENT LENSES OFF · SELECT ONE OR COMBINE MULTIPLE VIEWS
                   </p>
                 </div>
+              </div>
+
+              <div class="no60-modification-control">
+                <button
+                  id="no60-modification-toggle"
+                  class="control-section-toggle no60-modification-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="no60-modification-panel"
+                >
+                  <span>NO.60 MODIFICATION</span><strong id="no60-modification-toggle-status">SHOW</strong>
+                </button>
               </div>
 
               <div class="flow-field-menu">
@@ -558,11 +642,88 @@
           </div>
           <div class="sequence-timeline-actions">
             <button id="sequence-play" type="button">PLAY SEQUENCE</button>
+            <button id="sequence-random-five" type="button" title="Replace the timeline with five random movements from 1–59">RANDOM 5</button>
             <button id="sequence-clear" type="button">CLEAR</button>
             <button id="sequence-timeline-close" class="menu-panel-close" type="button" aria-label="Hide sequence timeline">×</button>
           </div>
         </header>
         <div id="sequence-track" class="sequence-track" aria-live="polite"></div>
+      </section>
+
+      <section id="mix-up-panel" class="sequence-timeline-panel mix-up-panel" aria-label="Mix movement body parts" hidden>
+        <header class="sequence-timeline-heading">
+          <div>
+            <span>MIX-UP</span>
+            <strong id="mix-up-status" aria-live="polite">READY · COMBINE MOVEMENT SOURCES BY BODY REGION</strong>
+          </div>
+          <div class="sequence-timeline-actions">
+            <button id="mix-up-play" type="button">PLAY MIX</button>
+            <button id="mix-up-reset" type="button">RESET</button>
+            <button id="mix-up-close" class="menu-panel-close" type="button" aria-label="Hide Mix-up panel">×</button>
+          </div>
+        </header>
+        <div class="mix-up-content">
+          <section class="mix-up-randomizer" aria-label="Random mix methods">
+            <div>
+              <span>RANDOM METHODS</span>
+              <p>Generate a layered dancer instantly from movements 1–59.</p>
+            </div>
+            <button type="button" data-mix-up-method="topBottom">
+              <strong>TOP / BOTTOM</strong><small>Upper and lower body from two movements</small>
+            </button>
+            <button type="button" data-mix-up-method="leftRight">
+              <strong>LEFT / RIGHT</strong><small>Left, center, and right from three movements</small>
+            </button>
+            <button type="button" data-mix-up-method="frankenstein">
+              <strong>FRANKENSTEIN</strong><small>Every region from a different movement</small>
+            </button>
+          </section>
+          <section class="mix-up-sources" aria-label="Movement source for each body region">
+            <div class="mix-up-sources__intro">
+              <span>BODY REGION SOURCES</span>
+              <p>Shorter clips loop independently. Every loop blends back to its first non-T-pose frame.</p>
+            </div>
+            <div id="mix-up-source-grid" class="mix-up-source-grid"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="no60-modification-panel" class="sequence-timeline-panel no60-modification-panel" aria-label="NO.60 movement modification comparison" hidden>
+        <div
+          id="no60-modification-resizer"
+          class="no60-modification-resizer"
+          role="separator"
+          aria-label="Resize NO.60 modification drawer"
+          aria-orientation="horizontal"
+          aria-valuemin="68"
+          aria-valuemax="720"
+          aria-valuenow="375"
+          tabindex="0"
+        ><span></span></div>
+        <header class="sequence-timeline-heading no60-modification-heading">
+          <div>
+            <span>NO.60 MODIFICATION</span>
+            <strong id="no60-modification-status" aria-live="polite">ORIGINAL + MODIFIED · SYNCHRONIZED COMPARISON</strong>
+          </div>
+          <div class="sequence-timeline-actions">
+            <button id="no60-modification-random" type="button">RANDOM</button>
+            <button id="no60-modification-reset" type="button">RESET</button>
+            <button id="no60-modification-close" class="menu-panel-close" type="button" aria-label="Exit NO.60 Modification">×</button>
+          </div>
+        </header>
+        <div class="no60-modification-content">
+          <div id="no60-modification-controls" class="no60-modification-controls" aria-label="NO.60 element modification controls"></div>
+        </div>
+        <aside id="no60-modification-info" class="no60-modification-info" aria-live="polite" hidden>
+          <button id="no60-modification-info-close" class="menu-panel-close" type="button" aria-label="Close element explanation">×</button>
+          <h3 id="no60-modification-info-title">ELEMENT</h3>
+          <dl>
+            <div><dt>MEANING</dt><dd id="no60-modification-info-meaning"></dd></div>
+            <div><dt>VISUAL EFFECT</dt><dd id="no60-modification-info-visual"></dd></div>
+            <div><dt>TECHNICAL</dt><dd id="no60-modification-info-technical"></dd></div>
+            <div><dt>BODY REGIONS + BOUNDARIES</dt><dd id="no60-modification-info-boundary"></dd></div>
+          </dl>
+        </aside>
       </section>
 
       <footer class="transport">
@@ -589,6 +750,7 @@
           <button type="button" data-speed="3" class="active">3×</button>
           <button type="button" data-speed="4">4×</button>
           <button type="button" data-speed="5">5×</button>
+          <button type="button" data-speed="10">10×</button>
           <button id="apply-sequence-speed-all" class="speed-apply-all" type="button" disabled>APPLY ALL</button>
         </div>
 

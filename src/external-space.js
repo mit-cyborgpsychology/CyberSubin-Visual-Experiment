@@ -33,9 +33,12 @@ const TRACKER_FALLBACKS = {
   RightToeBase: 'rightFoot'
 };
 
-const CANDIDATE_MULTIPLIER = 3.25;
-const UPDATE_RATE = { single: 18, embedded: 12 };
 const EXPERIMENT_RED = new THREE.Color(0xfb5c50);
+const CANDIDATE_MULTIPLIER = 2.75;
+const PARTICLE_ALPHA = 0.86;
+const PARTICLE_SIZE = 14;
+const BASE_PARTICLE_BUDGET = Object.freeze({ embedded: 1800, full: 10000 });
+const MAX_PARTICLE_BUDGET = Object.freeze({ embedded: 2400, full: 13500 });
 
 const VERTEX_SHADER = /* glsl */`
   uniform float uTime;
@@ -49,16 +52,13 @@ const VERTEX_SHADER = /* glsl */`
   varying float vAlpha;
 
   void main() {
-    vec3 fluidPosition = position;
-    float drift = uBodyHeight * 0.0065;
-    fluidPosition.x += sin(uTime * 0.72 + aPhase + position.y * 2.1) * drift;
-    fluidPosition.y += cos(uTime * 0.58 + aPhase * 1.37 + position.x * 1.8) * drift;
-    fluidPosition.z += sin(uTime * 0.84 + aPhase * 0.71 + position.x * 2.4) * drift * 1.3;
-    vec4 viewPosition = modelViewMatrix * vec4(fluidPosition, 1.0);
+    // Particle positions are rebuilt from the current pose every frame. Keep
+    // them exact here so the shape never floats away from the body contour.
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * viewPosition;
     gl_PointSize = max(1.0, aSize * uPixelRatio * (2.9 / max(1.0, -viewPosition.z)));
     vColor = color;
-    vAlpha = aAlpha * (0.88 + sin(uTime * 1.08 + aPhase) * 0.12);
+    vAlpha = aAlpha;
   }
 `;
 
@@ -103,7 +103,8 @@ function createCandidates(count) {
 }
 
 export function createExternalSpacePointCloud({ embedded = false } = {}) {
-  const budget = embedded ? 1500 : 8000;
+  const baseBudget = embedded ? BASE_PARTICLE_BUDGET.embedded : BASE_PARTICLE_BUDGET.full;
+  const budget = embedded ? MAX_PARTICLE_BUDGET.embedded : MAX_PARTICLE_BUDGET.full;
   const geometry = new THREE.BufferGeometry();
   const positions = new THREE.BufferAttribute(new Float32Array(budget * 3), 3);
   const colors = new THREE.BufferAttribute(new Float32Array(budget * 3), 3);
@@ -158,13 +159,41 @@ export function createExternalSpacePointCloud({ embedded = false } = {}) {
     sizes,
     alphas,
     uniforms,
+    // Scan a larger deterministic candidate field and pack every accepted
+    // point. This keeps the negative-space volume evenly filled instead of
+    // leaving sparse holes wherever a candidate lands inside the body.
     candidates: createCandidates(Math.ceil(budget * CANDIDATE_MULTIPLIER)),
+    targetPositions: new Float32Array(budget * 3),
+    targetColors: new Float32Array(budget * 3),
+    targetSizes: new Float32Array(budget),
+    targetAlphas: new Float32Array(budget),
     budget,
+    baseBudget,
     embedded,
-    lastUpdate: -Infinity,
+    surfaceRoot: null,
+    surfaceSamplers: [],
+    targetCount: 0,
+    visibleCount: 0,
+    renderCount: 0,
+    initialized: false,
     color: EXPERIMENT_RED.clone(),
     bodyHeight: 3
   };
+}
+
+function commitPointCloud(visuals) {
+  const pointValues = visuals.targetCount * 3;
+  visuals.positions.array.set(visuals.targetPositions.subarray(0, pointValues), 0);
+  visuals.colors.array.set(visuals.targetColors.subarray(0, pointValues), 0);
+  visuals.sizes.array.set(visuals.targetSizes.subarray(0, visuals.targetCount), 0);
+  visuals.alphas.array.set(visuals.targetAlphas.subarray(0, visuals.targetCount), 0);
+  visuals.renderCount = visuals.targetCount;
+  visuals.initialized = true;
+  for (const attribute of [visuals.positions, visuals.colors, visuals.phases, visuals.sizes, visuals.alphas]) {
+    attribute.needsUpdate = true;
+  }
+  visuals.geometry.setDrawRange(0, visuals.renderCount);
+  visuals.points.visible = visuals.visibleCount > 0;
 }
 
 function getBoneRadius(name, bodyHeight) {
@@ -237,6 +266,106 @@ function measureToCapsule(px, py, pz, capsule) {
   return Math.sqrt(dx * dx + dy * dy + dz * dz) - radius;
 }
 
+function sampleCapsuleSurface(capsule, bodyHeight, hullSamples) {
+  const horizontalLength = capsule.end.horizontal - capsule.start.horizontal;
+  const verticalLength = capsule.end.vertical - capsule.start.vertical;
+  const projectedLength = Math.hypot(horizontalLength, verticalLength);
+  const alongSamples = THREE.MathUtils.clamp(
+    Math.ceil(projectedLength / Math.max(bodyHeight * 0.045, 0.001)),
+    4,
+    14
+  );
+  const radialSamples = 16;
+
+  // Sample the full anatomical segment, including its end caps. The resulting
+  // silhouette is built from estimated skin surfaces rather than joint centers.
+  for (let along = 0; along <= alongSamples; along += 1) {
+    const progress = along / alongSamples;
+    const horizontal = THREE.MathUtils.lerp(
+      capsule.start.horizontal,
+      capsule.end.horizontal,
+      progress
+    );
+    const vertical = THREE.MathUtils.lerp(
+      capsule.start.vertical,
+      capsule.end.vertical,
+      progress
+    );
+    const radius = THREE.MathUtils.lerp(
+      capsule.start.radius,
+      capsule.end.radius,
+      progress
+    );
+    for (let radial = 0; radial < radialSamples; radial += 1) {
+      const angle = radial / radialSamples * Math.PI * 2;
+      hullSamples.push(new THREE.Vector2(
+        horizontal + Math.cos(angle) * radius,
+        vertical + Math.sin(angle) * radius
+      ));
+    }
+  }
+}
+
+function getSurfaceSamplers(visuals, root) {
+  if (!root) return [];
+  if (visuals.surfaceRoot === root) return visuals.surfaceSamplers;
+
+  const meshes = [];
+  let totalVertices = 0;
+  root.traverse((child) => {
+    const position = child.geometry?.getAttribute?.('position');
+    if (!child.isMesh || !position?.count) return;
+    meshes.push({ mesh: child, vertexCount: position.count });
+    totalVertices += position.count;
+  });
+
+  const surfaceBudget = visuals.embedded ? 320 : 720;
+  visuals.surfaceSamplers = meshes.map(({ mesh, vertexCount }) => {
+    const sampleCount = THREE.MathUtils.clamp(
+      Math.round(surfaceBudget * vertexCount / Math.max(1, totalVertices)),
+      12,
+      Math.min(surfaceBudget, vertexCount)
+    );
+    const indices = new Uint32Array(sampleCount);
+    for (let index = 0; index < sampleCount; index += 1) {
+      indices[index] = Math.min(
+        vertexCount - 1,
+        Math.floor((index + 0.5) * vertexCount / sampleCount)
+      );
+    }
+    return { mesh, indices };
+  });
+  visuals.surfaceRoot = root;
+  return visuals.surfaceSamplers;
+}
+
+function sampleSkinnedSurface(visuals, root, frame, hullSamples) {
+  const samplers = getSurfaceSamplers(visuals, root);
+  if (!samplers.length) return null;
+  root.updateMatrixWorld(true);
+
+  const vertex = new THREE.Vector3();
+  const relative = new THREE.Vector3();
+  let minimumDepth = Infinity;
+  let maximumDepth = -Infinity;
+  let sampleCount = 0;
+  for (const { mesh, indices } of samplers) {
+    for (const vertexIndex of indices) {
+      mesh.getVertexPosition(vertexIndex, vertex).applyMatrix4(mesh.matrixWorld);
+      relative.copy(vertex).sub(frame.hips);
+      const horizontal = relative.dot(frame.horizontalAxis);
+      const vertical = relative.dot(frame.verticalAxis);
+      const depth = relative.dot(frame.depthAxis);
+      if (!Number.isFinite(horizontal + vertical + depth)) continue;
+      hullSamples.push(new THREE.Vector2(horizontal, vertical));
+      minimumDepth = Math.min(minimumDepth, depth);
+      maximumDepth = Math.max(maximumDepth, depth);
+      sampleCount += 1;
+    }
+  }
+  return sampleCount >= 24 ? { minimumDepth, maximumDepth } : null;
+}
+
 function buildBodyFrame(bones, trackers, displayHeight) {
   const trackersById = new Map(trackers.map((tracker) => [tracker.definition.id, tracker]));
   const resolvePosition = (name) => {
@@ -291,47 +420,64 @@ function buildBodyFrame(bones, trackers, displayHeight) {
 
 export function updateExternalSpacePointCloud(
   visuals,
-  { bones, trackers, time, pixelRatio = 1, displayHeight = 3 }
+  {
+    root = null,
+    bones,
+    trackers,
+    time,
+    pixelRatio = 1,
+    displayHeight = 3,
+    intensity = 100
+  }
 ) {
   visuals.uniforms.uTime.value = time;
   visuals.uniforms.uPixelRatio.value = pixelRatio;
-  const updateRate = visuals.embedded ? UPDATE_RATE.embedded : UPDATE_RATE.single;
-  if (time - visuals.lastUpdate < 1 / updateRate) return;
-  visuals.lastUpdate = time;
 
   const frame = buildBodyFrame(bones, trackers, displayHeight);
   if (!frame || frame.capsules.length < 4) {
-    visuals.points.visible = false;
-    visuals.geometry.setDrawRange(0, 0);
+    visuals.targetCount = 0;
+    visuals.visibleCount = 0;
+    commitPointCloud(visuals);
     return;
   }
-  const { hips, horizontalAxis, verticalAxis, depthAxis, nodes, capsules, bodyHeight } = frame;
+  const { hips, horizontalAxis, verticalAxis, depthAxis, capsules, bodyHeight } = frame;
   visuals.bodyHeight = bodyHeight;
   visuals.uniforms.uBodyHeight.value = bodyHeight;
 
   const hullSamples = [];
   let minimumDepth = Infinity;
   let maximumDepth = -Infinity;
-  for (const node of nodes.values()) {
-    minimumDepth = Math.min(minimumDepth, node.depth - node.radius);
-    maximumDepth = Math.max(maximumDepth, node.depth + node.radius);
-    for (let sample = 0; sample < 10; sample += 1) {
-      const angle = sample / 10 * Math.PI * 2;
-      const surfaceRadius = node.radius * 1.06;
-      hullSamples.push(new THREE.Vector2(
-        node.horizontal + Math.cos(angle) * surfaceRadius,
-        node.vertical + Math.sin(angle) * surfaceRadius
-      ));
+  const skinnedSurface = sampleSkinnedSurface(visuals, root, frame, hullSamples);
+  if (skinnedSurface) {
+    minimumDepth = skinnedSurface.minimumDepth;
+    maximumDepth = skinnedSurface.maximumDepth;
+  } else {
+    for (const capsule of capsules) {
+      minimumDepth = Math.min(
+        minimumDepth,
+        capsule.start.depth - capsule.start.radius,
+        capsule.end.depth - capsule.end.radius
+      );
+      maximumDepth = Math.max(
+        maximumDepth,
+        capsule.start.depth + capsule.start.radius,
+        capsule.end.depth + capsule.end.radius
+      );
+      sampleCapsuleSurface(capsule, bodyHeight, hullSamples);
     }
   }
   let hull = convexHull(hullSamples);
   if (hull.length < 3) {
-    visuals.points.visible = false;
+    visuals.targetCount = 0;
+    visuals.visibleCount = 0;
+    commitPointCloud(visuals);
     return;
   }
   const hullCenter = hull.reduce((center, point) => center.add(point), new THREE.Vector2())
     .multiplyScalar(1 / hull.length);
-  const envelopePadding = bodyHeight * 0.095;
+  const normalizedIntensity = THREE.MathUtils.clamp(Number(intensity) / 100, 0, 2);
+  const addedEmphasis = Math.max(0, normalizedIntensity - 1);
+  const envelopePadding = bodyHeight * (0.085 + addedEmphasis * 0.025);
   hull = hull.map((point) => {
     const outward = point.clone().sub(hullCenter);
     return outward.lengthSq() > 0.000001
@@ -351,14 +497,40 @@ export function updateExternalSpacePointCloud(
   const horizontalRange = maximumHorizontal - minimumHorizontal;
   const verticalRange = maximumHullVertical - minimumHullVertical;
   const depthCenter = (minimumDepth + maximumDepth) * 0.5;
-  const depthHalf = Math.max((maximumDepth - minimumDepth) * 0.5 + bodyHeight * 0.035, bodyHeight * 0.13);
-  const bodyClearance = bodyHeight * 0.012;
-  const densityDistance = bodyHeight * 0.2;
-  const pointSizeScale = visuals.embedded ? 0.7 : 1;
-  const temporaryColor = new THREE.Color();
+  const depthHalf = Math.max(
+    (maximumDepth - minimumDepth) * 0.5 + bodyHeight * 0.04,
+    bodyHeight * 0.13
+  );
+  // Begin immediately outside the estimated skin surface. The stencil test is
+  // the final guard against drawing any particle inside the rendered mesh.
+  const bodyClearance = Math.max(bodyHeight * 0.0045, 0.004);
+  const pointEmphasisScale = normalizedIntensity <= 1
+    ? THREE.MathUtils.lerp(0.82, 1, normalizedIntensity)
+    : THREE.MathUtils.lerp(1, 1.3, addedEmphasis);
+  const alphaEmphasisScale = normalizedIntensity <= 1
+    ? THREE.MathUtils.lerp(0.68, 1, normalizedIntensity)
+    : THREE.MathUtils.lerp(1, 1.16, addedEmphasis);
+  const pointSizeScale = (visuals.embedded ? 0.7 : 1) * pointEmphasisScale;
+  const pointAlpha = THREE.MathUtils.clamp(
+    PARTICLE_ALPHA * alphaEmphasisScale,
+    0.38,
+    1
+  );
+  const drawBudget = Math.min(
+    visuals.budget,
+    Math.round(visuals.baseBudget * (
+      normalizedIntensity <= 1
+        ? THREE.MathUtils.lerp(0.62, 1, normalizedIntensity)
+        : THREE.MathUtils.lerp(1, visuals.budget / visuals.baseBudget, addedEmphasis)
+    ))
+  );
   let drawCount = 0;
 
-  for (let candidateIndex = 0; candidateIndex < visuals.candidates.count; candidateIndex += 1) {
+  for (
+    let candidateIndex = 0;
+    candidateIndex < visuals.candidates.count && drawCount < drawBudget;
+    candidateIndex += 1
+  ) {
     const candidateOffset = candidateIndex * 3;
     const normalizedHorizontal = visuals.candidates.coordinates[candidateOffset];
     const normalizedVertical = visuals.candidates.coordinates[candidateOffset + 1];
@@ -378,37 +550,30 @@ export function updateExternalSpacePointCloud(
       + horizontalAxis.y * horizontal + verticalAxis.y * vertical + depthAxis.y * depth;
     const worldZ = hips.z
       + horizontalAxis.z * horizontal + verticalAxis.z * vertical + depthAxis.z * depth;
-
     let clearance = Infinity;
     for (const capsule of capsules) {
       clearance = Math.min(clearance, measureToCapsule(worldX, worldY, worldZ, capsule));
     }
     if (clearance <= bodyClearance) continue;
-    const nearBody = Math.exp(-clearance / densityDistance);
-    const density = 0.3 + nearBody * 0.68;
-    if (visuals.candidates.selectors[candidateIndex] > density) continue;
 
+    // Every accepted point uses the same color, size, and opacity. The Halton
+    // field provides an even volumetric distribution between the live body
+    // contour and its outer envelope without surface clustering.
     const pointOffset = drawCount * 3;
-    visuals.positions.array[pointOffset] = worldX;
-    visuals.positions.array[pointOffset + 1] = worldY;
-    visuals.positions.array[pointOffset + 2] = worldZ;
-    temporaryColor.copy(visuals.color);
-    const depthLight = 0.78 + (1 - Math.abs(normalizedDepth)) * 0.22;
-    visuals.colors.array[pointOffset] = temporaryColor.r * depthLight;
-    visuals.colors.array[pointOffset + 1] = temporaryColor.g * depthLight;
-    visuals.colors.array[pointOffset + 2] = temporaryColor.b * depthLight;
+    visuals.targetPositions[pointOffset] = worldX;
+    visuals.targetPositions[pointOffset + 1] = worldY;
+    visuals.targetPositions[pointOffset + 2] = worldZ;
+    visuals.targetColors[pointOffset] = visuals.color.r;
+    visuals.targetColors[pointOffset + 1] = visuals.color.g;
+    visuals.targetColors[pointOffset + 2] = visuals.color.b;
     visuals.phases.array[drawCount] = visuals.candidates.phases[candidateIndex];
-    visuals.sizes.array[drawCount] = (10.2 + nearBody * 9.2
-      + visuals.candidates.selectors[candidateIndex] * 3) * pointSizeScale;
-    visuals.alphas.array[drawCount] = (0.44 + nearBody * 0.54)
-      * (0.8 + (1 - Math.abs(normalizedDepth)) * 0.2);
+    visuals.targetSizes[drawCount] = PARTICLE_SIZE * pointSizeScale;
+    visuals.targetAlphas[drawCount] = pointAlpha;
     drawCount += 1;
-    if (drawCount >= visuals.budget) break;
   }
 
-  for (const attribute of [visuals.positions, visuals.colors, visuals.phases, visuals.sizes, visuals.alphas]) {
-    attribute.needsUpdate = true;
-  }
-  visuals.geometry.setDrawRange(0, drawCount);
-  visuals.points.visible = drawCount > 0;
+  visuals.targetCount = drawCount;
+  visuals.visibleCount = drawCount;
+  visuals.phases.needsUpdate = true;
+  commitPointCloud(visuals);
 }
