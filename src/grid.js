@@ -5,7 +5,7 @@ import './grid.css';
 const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
 const DEFAULT_SPEED = 3;
-const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10, 50]);
+const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10, 20, 50]);
 const GRID_STATE_KEY = 'cyber-subin-six-avatar-state';
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const EXTRA_MODEL_URLS = import.meta.glob('../models/*.glb', {

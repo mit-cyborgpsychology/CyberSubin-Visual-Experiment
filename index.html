@@ -197,15 +197,6 @@
                     <output id="avatar-position-readout" aria-live="polite">X 0.0 · Y 0.0</output>
                   </div>
 
-                  <div class="environment-control environment-control--camera" aria-label="Scene lighting controls">
-                    <div class="floor-light-control option-row--compact option-row--two" aria-label="Floor light level">
-                      <span>FLOOR LIGHT</span>
-                      <button type="button" data-floor-light="off" class="active">OFF</button>
-                      <button type="button" data-floor-light="low">LOW</button>
-                      <button type="button" data-floor-light="medium">MED</button>
-                      <button type="button" data-floor-light="high">HIGH</button>
-                    </div>
-                  </div>
                 </div>
               </section>
 
@@ -247,8 +238,8 @@
                       <button type="button" data-trace-mode="brief">FADE 1.5S</button>
                       <button type="button" data-trace-mode="instant">FADE 1S</button>
                     </div>
-                    <div class="trace-option-group option-grid--two trace-body-parts" aria-label="Trace body parts">
-                      <span>BODY PARTS · MULTI-SELECT</span>
+                    <div class="trace-option-group option-grid--two trace-body-parts" aria-label="Trace body-part visibility">
+                      <span>BODY PARTS · SHOW / HIDE</span>
                       <button type="button" data-trace-part="body" class="active" aria-pressed="true">BODY</button>
                       <button type="button" data-trace-part="hand" class="active" aria-pressed="true">HAND</button>
                       <button type="button" data-trace-part="arm" class="active" aria-pressed="true">ARM</button>
@@ -779,6 +770,7 @@
               <button type="button" role="radio" aria-checked="false" data-speed="4">4×</button>
               <button type="button" role="radio" aria-checked="false" data-speed="5">5×</button>
               <button type="button" role="radio" aria-checked="false" data-speed="10">10×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="20">20×</button>
               <button type="button" role="radio" aria-checked="false" data-speed="50">50×</button>
             </div>
           </details>

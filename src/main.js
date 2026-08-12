@@ -87,7 +87,7 @@ const CURVE_HISTORY_LENGTH = 108;
 const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
 const DEFAULT_SPEED = 3;
-const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10, 50]);
+const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10, 20, 50]);
 const DEFAULT_AVATAR_COLOR = 'lightGrey';
 const DEFAULT_AVATAR_GRADIENT_COLOR = '#d9dcde';
 const DEFAULT_SURFACE_MODE = 'smooth';
@@ -217,12 +217,7 @@ const LEGACY_TRACE_REGION_PARTS = Object.freeze({
   limbs: Object.freeze(['hand', 'arm', 'leg', 'feet']),
   full: DEFAULT_TRACE_PARTS
 });
-const FLOOR_LIGHT_LEVELS = {
-  off: { color: 0x000000 },
-  low: { color: 0x020303 },
-  medium: { color: 0x050708 },
-  high: { color: 0x162226 }
-};
+const LEGACY_FLOOR_LIGHT_LEVELS = new Set(['off', 'low', 'medium', 'high']);
 const AVATAR_COLORS = {
   pearl: '#c7c9c5',
   cyan: '#65f3ff',
@@ -894,15 +889,6 @@ scene.add(rimLight);
 const fillLight = new THREE.DirectionalLight(0xa98bff, 1.15);
 fillLight.position.set(4, 1.5, -3);
 scene.add(fillLight);
-
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(14, 14),
-  new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false })
-);
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.012;
-ground.receiveShadow = false;
-scene.add(ground);
 
 const analysisObjects = new THREE.Group();
 scene.add(analysisObjects);
@@ -5870,11 +5856,10 @@ function syncTracePartButtons() {
 }
 
 function applyTracePartSelection() {
-  state.trailElapsed = 0;
   syncTracePartButtons();
   state.trackers.forEach((tracker) => {
-    clearTrailGeometry(tracker);
     const selected = tracePartsIncludeTracker(tracker.definition.id);
+    if (selected && state.traceVisible) updateTrailGeometry(tracker);
     tracker.trail.visible = state.traceVisible && selected;
     tracker.trailDots.visible = state.traceVisible && state.traceDots && selected;
   });
@@ -5951,10 +5936,8 @@ function setTraceSampleRate(rate, activeButton) {
 }
 
 function setFloorLight(level, activeButton) {
-  const preset = FLOOR_LIGHT_LEVELS[level];
-  if (!preset) return;
+  if (!LEGACY_FLOOR_LIGHT_LEVELS.has(level)) return;
   state.floorLight = level;
-  ground.material.color.setHex(preset.color);
   ui.floorLightButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
 }
 
@@ -6270,7 +6253,7 @@ function updateMotionSignals(delta, shouldSample, trailSampling = null) {
       if (tracker.history.average.length > SIGNAL_WINDOW) tracker.history.average.shift();
     }
 
-    if (trailSampling?.count > 0 && tracePartsIncludeTracker(tracker.definition.id)) {
+    if (trailSampling?.count > 0) {
       for (let sampleIndex = 0; sampleIndex < trailSampling.count; sampleIndex += 1) {
         const sampleTime = trailSampling.interval * (sampleIndex + 1) - trailSampling.elapsedBeforeFrame;
         const interpolation = THREE.MathUtils.clamp(sampleTime / trailSampling.frameDelta, 0, 1);
