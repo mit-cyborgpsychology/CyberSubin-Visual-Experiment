@@ -454,6 +454,18 @@
                 </button>
               </div>
 
+              <div class="no60-element-analysis-control">
+                <button
+                  id="no60-element-analysis-toggle"
+                  class="control-section-toggle no60-element-analysis-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="no60-element-analysis-panel"
+                >
+                  <span>NO.60 ELEMENT ANALYSIS</span><strong id="no60-element-analysis-toggle-status">SHOW</strong>
+                </button>
+              </div>
+
               <div class="flow-field-menu">
                 <div class="control-section-header control-section-header--flow">
                   <button
@@ -737,6 +749,64 @@
             <div><dt>BODY REGIONS + BOUNDARIES</dt><dd id="no60-modification-info-boundary"></dd></div>
           </dl>
         </aside>
+      </section>
+
+      <section id="no60-element-analysis-panel" class="sequence-timeline-panel no60-element-analysis-panel" aria-label="NO.60 element analysis over time" hidden>
+        <div
+          id="no60-element-analysis-resizer"
+          class="no60-modification-resizer no60-element-analysis-resizer"
+          role="separator"
+          aria-label="Resize NO.60 element analysis drawer"
+          aria-orientation="horizontal"
+          aria-valuemin="68"
+          aria-valuemax="720"
+          aria-valuenow="405"
+          tabindex="0"
+        ><span></span></div>
+        <header class="sequence-timeline-heading no60-modification-heading no60-element-analysis-heading">
+          <div>
+            <span>NO.60 ELEMENT ANALYSIS</span>
+            <strong id="no60-element-analysis-status" aria-live="polite">ANALYZING CURRENT MOVEMENT…</strong>
+          </div>
+          <div class="sequence-timeline-actions">
+            <button
+              id="no60-element-analysis-guide-toggle"
+              class="no60-element-analysis-guide-toggle"
+              type="button"
+              aria-controls="no60-element-analysis-guide"
+              aria-expanded="false"
+            >ALGORITHM GUIDE</button>
+            <button id="no60-element-analysis-close" class="menu-panel-close" type="button" aria-label="Hide NO.60 Element Analysis">×</button>
+          </div>
+        </header>
+        <div class="no60-element-analysis-content">
+          <div id="no60-element-analysis-values" class="no60-element-analysis-values" aria-label="Current NO.60 element percentages"></div>
+          <div class="no60-element-analysis-chart-wrap">
+            <canvas
+              id="no60-element-analysis-chart"
+              class="no60-element-analysis-chart"
+              role="img"
+              aria-label="Dominating-element timeline and line graph of six NO.60 movement elements from zero to one hundred percent over time"
+            ></canvas>
+            <div id="no60-element-analysis-tooltip" class="no60-element-analysis-tooltip" role="tooltip" hidden></div>
+          </div>
+          <p class="no60-element-analysis-method">
+            DOMINANT BAR SECTION LENGTH REPRESENTS TIME · CLICK ELEMENT CARDS TO SHOW OR HIDE LINES · LIVE POSE FEATURES · TEMPORALLY SMOOTHED
+          </p>
+        </div>
+        <section id="no60-element-analysis-guide" class="no60-element-analysis-guide" aria-label="How the six NO.60 element algorithms work" hidden>
+          <div class="no60-element-analysis-guide-overview">
+            <div>
+              <span>METHODOLOGY</span>
+              <h3>HOW THE SIX ELEMENT SCORES ARE CALCULATED</h3>
+            </div>
+            <p>Each animation is sampled across its full playable duration. Positions are measured relative to the hips, rotations use world-space quaternions, and central differences estimate velocity and acceleration. Scores describe this movement relative to its own activity range; they are analytical proxies, not absolute scientific or physiological measurements.</p>
+          </div>
+          <div id="no60-element-analysis-guide-grid" class="no60-element-analysis-guide-grid"></div>
+          <p class="no60-element-analysis-guide-note">
+            DOMINANCE TIMELINE · THE HIGHEST SCORE WINS · A 6-POINT SWITCH MARGIN AND MINIMUM-DURATION FILTER REMOVE ONE-FRAME FLUCTUATIONS
+          </p>
+        </section>
       </section>
 
       <footer class="transport">

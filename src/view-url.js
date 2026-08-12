@@ -27,6 +27,7 @@ const STRING_PARAMETERS = [
   'no60ModificationValues',
   'no60ModificationMasters',
   'no60VisualizationTargets',
+  'no60ElementAnalysisSeries',
   'physicsConstants'
 ];
 
@@ -77,6 +78,7 @@ const BOOLEAN_PARAMETERS = [
   'mixUpPanelOpen',
   'no60ModificationMode',
   'no60ModificationPanelOpen',
+  'no60ElementAnalysisOpen',
   'physicsConstantsOpen',
   'controlsHidden',
   'interfaceHidden'

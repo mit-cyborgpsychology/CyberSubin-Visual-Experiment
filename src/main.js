@@ -40,6 +40,12 @@ import {
   sanitizeNo60ModificationMasters,
   sanitizeNo60ModificationValues
 } from './no60-modification.js';
+import {
+  NO60_ELEMENT_ANALYSIS_DEFINITIONS,
+  analyzeNo60ElementFrames,
+  buildNo60DominanceSegments,
+  interpolateNo60ElementSample
+} from './no60-element-analysis.js';
 import { readViewStateFromParams, writeViewStateToParams } from './view-url.js';
 import { posture } from '../59.ts';
 import './styles.css';
@@ -118,6 +124,9 @@ const INITIAL_POSE_TRIM_SECONDS = 0.35;
 const MAX_SEQUENCE_LENGTH = 59;
 const NO60_DRAWER_MIN_HEIGHT = 68;
 const NO60_DRAWER_DEFAULT_HEIGHT = 405;
+const NO60_ELEMENT_ANALYSIS_SAMPLE_RATE = 8;
+const NO60_ELEMENT_ANALYSIS_MIN_SAMPLES = 180;
+const NO60_ELEMENT_ANALYSIS_MAX_SAMPLES = 480;
 const NO60_DRAWER_TOP_GAP = 150;
 let sequenceEntryCounter = 0;
 const FLOW_FIELD_SLIDER_CONFIG = Object.freeze({
@@ -564,6 +573,12 @@ const TRACK_DEFINITIONS = [
   }
 ];
 
+const NO60_AXIS_POINT_BONE_NAMES = Object.freeze([
+  'Hips', 'Spine2', 'Head',
+  'LeftArm', 'LeftForeArm', 'LeftHand', 'RightArm', 'RightForeArm', 'RightHand',
+  'LeftLeg', 'LeftFoot', 'RightLeg', 'RightFoot'
+]);
+
 const ui = {
   appShell: document.querySelector('.app-shell'),
   gridViewLink: document.querySelector('#grid-view-link'),
@@ -611,6 +626,18 @@ const ui = {
   no60ModificationInfoTechnical: document.querySelector('#no60-modification-info-technical'),
   no60ModificationInfoBoundary: document.querySelector('#no60-modification-info-boundary'),
   no60ComparisonOverlay: document.querySelector('#no60-comparison-overlay'),
+  no60ElementAnalysisToggle: document.querySelector('#no60-element-analysis-toggle'),
+  no60ElementAnalysisToggleStatus: document.querySelector('#no60-element-analysis-toggle-status'),
+  no60ElementAnalysisPanel: document.querySelector('#no60-element-analysis-panel'),
+  no60ElementAnalysisResizer: document.querySelector('#no60-element-analysis-resizer'),
+  no60ElementAnalysisClose: document.querySelector('#no60-element-analysis-close'),
+  no60ElementAnalysisGuideToggle: document.querySelector('#no60-element-analysis-guide-toggle'),
+  no60ElementAnalysisGuide: document.querySelector('#no60-element-analysis-guide'),
+  no60ElementAnalysisGuideGrid: document.querySelector('#no60-element-analysis-guide-grid'),
+  no60ElementAnalysisStatus: document.querySelector('#no60-element-analysis-status'),
+  no60ElementAnalysisValues: document.querySelector('#no60-element-analysis-values'),
+  no60ElementAnalysisChart: document.querySelector('#no60-element-analysis-chart'),
+  no60ElementAnalysisTooltip: document.querySelector('#no60-element-analysis-tooltip'),
   axisWidget: document.querySelector('.axis-widget'),
   sequenceDurationButtons: [...document.querySelectorAll('[data-sequence-duration]')],
   sequenceEasingButtons: [...document.querySelectorAll('[data-sequence-easing]')],
@@ -777,6 +804,16 @@ const state = {
   no60InfoElement: null,
   no60PanelHeight: NO60_DRAWER_DEFAULT_HEIGHT,
   no60PanelDrag: null,
+  no60ElementAnalysisOpen: false,
+  no60ElementAnalysisGuideOpen: false,
+  no60ElementAnalysisHeight: NO60_DRAWER_DEFAULT_HEIGHT,
+  no60ElementAnalysisDrag: null,
+  no60ElementAnalysisToken: 0,
+  no60ElementAnalysisData: null,
+  no60ElementAnalysisDominance: null,
+  no60ElementAnalysisHoverProgress: null,
+  no60ElementAnalysisMovementId: null,
+  no60ElementAnalysisSeries: new Set(NO60_ELEMENT_ANALYSIS_DEFINITIONS.map(({ id }) => id)),
   energyMotionIntensity: 0,
   energyBaselineMotionIntensity: 0,
   bones: new Map(),
@@ -1108,6 +1145,10 @@ function clearNo60ComparisonClone() {
 
 function clearCurrentModel() {
   state.ready = false;
+  state.no60ElementAnalysisToken += 1;
+  state.no60ElementAnalysisData = null;
+  state.no60ElementAnalysisDominance = null;
+  state.no60ElementAnalysisMovementId = null;
   clearNo60ComparisonClone();
   flowFieldVisual.group.visible = false;
   energySurfaceUniforms.enabled.value = 0;
@@ -1386,6 +1427,7 @@ function setSequenceTimelineOpen(open) {
   const nextOpen = Boolean(open)
     && !EMBEDDED_VIEW
     && isRigCompositionCompatible(getSelectedMovement());
+  if (nextOpen) setNo60ElementAnalysisOpen(false);
   if (nextOpen && state.mixUpPanelOpen) setMixUpPanelOpen(false);
   state.sequenceTimelineOpen = nextOpen;
   ui.sequenceTimelinePanel.hidden = !state.sequenceTimelineOpen;
@@ -1988,6 +2030,7 @@ function setMixUpPanelOpen(open) {
   const nextOpen = Boolean(open)
     && !EMBEDDED_VIEW
     && isRigCompositionCompatible(getSelectedMovement());
+  if (nextOpen) setNo60ElementAnalysisOpen(false);
   if (nextOpen && state.sequenceTimelineOpen) setSequenceTimelineOpen(false);
   if (nextOpen && !state.mixUpConfigured) {
     const movementId = getCurrentIndexedMovementId();
@@ -2528,6 +2571,464 @@ function handleNo60PanelResizeKey(event) {
   event.preventDefault();
 }
 
+function buildNo60ElementAnalysisValues() {
+  if (!ui.no60ElementAnalysisValues) return;
+  ui.no60ElementAnalysisValues.innerHTML = NO60_ELEMENT_ANALYSIS_DEFINITIONS.map((definition) => `
+    <button
+      class="no60-element-analysis-value"
+      data-no60-analysis-value="${definition.id}"
+      type="button"
+      aria-pressed="true"
+      title="Hide ${definition.label.toLowerCase()} graph"
+    >
+      <i style="--analysis-series-color:${definition.color}"></i>
+      <span>${definition.shortLabel ?? definition.label}</span>
+      <strong data-no60-analysis-output="${definition.id}">—%</strong>
+      <small>${definition.method}</small>
+    </button>
+  `).join('');
+  updateNo60ElementAnalysisSeriesControls();
+}
+
+function buildNo60ElementAnalysisGuide() {
+  if (!ui.no60ElementAnalysisGuideGrid) return;
+  ui.no60ElementAnalysisGuideGrid.innerHTML = NO60_ELEMENT_ANALYSIS_DEFINITIONS.map((definition, index) => `
+    <article class="no60-element-analysis-guide-card" style="--analysis-series-color:${definition.color}">
+      <header>
+        <span>${String(index + 1).padStart(2, '0')}</span>
+        <h4>${definition.label}</h4>
+      </header>
+      <dl>
+        <div><dt>ANALYZES</dt><dd>${definition.analysis.analyzes}</dd></div>
+        <div><dt>ALGORITHM</dt><dd>${definition.analysis.algorithm}</dd></div>
+        <div><dt>0–100% SCALE</dt><dd>${definition.analysis.scale}</dd></div>
+        <div><dt>READING</dt><dd>${definition.analysis.interpretation}</dd></div>
+      </dl>
+    </article>
+  `).join('');
+}
+
+function setNo60ElementAnalysisGuideOpen(open) {
+  state.no60ElementAnalysisGuideOpen = Boolean(open);
+  if (ui.no60ElementAnalysisGuide) ui.no60ElementAnalysisGuide.hidden = !state.no60ElementAnalysisGuideOpen;
+  if (ui.no60ElementAnalysisValues?.parentElement) {
+    ui.no60ElementAnalysisValues.parentElement.hidden = state.no60ElementAnalysisGuideOpen;
+  }
+  if (ui.no60ElementAnalysisGuideToggle) {
+    ui.no60ElementAnalysisGuideToggle.textContent = state.no60ElementAnalysisGuideOpen
+      ? 'BACK TO GRAPH'
+      : 'ALGORITHM GUIDE';
+    ui.no60ElementAnalysisGuideToggle.setAttribute(
+      'aria-expanded',
+      String(state.no60ElementAnalysisGuideOpen)
+    );
+    ui.no60ElementAnalysisGuideToggle.classList.toggle('is-active', state.no60ElementAnalysisGuideOpen);
+  }
+  if (!state.no60ElementAnalysisGuideOpen) drawNo60ElementAnalysisChart();
+}
+
+function updateNo60ElementAnalysisSeriesControls() {
+  for (const definition of NO60_ELEMENT_ANALYSIS_DEFINITIONS) {
+    const control = ui.no60ElementAnalysisValues?.querySelector(
+      `[data-no60-analysis-value="${definition.id}"]`
+    );
+    if (!control) continue;
+    const visible = state.no60ElementAnalysisSeries.has(definition.id);
+    control.classList.toggle('is-series-hidden', !visible);
+    control.setAttribute('aria-pressed', String(visible));
+    control.title = `${visible ? 'Hide' : 'Show'} ${definition.label.toLowerCase()} graph`;
+  }
+}
+
+function setNo60ElementAnalysisSeries(ids) {
+  const requested = new Set(Array.isArray(ids) ? ids : []);
+  state.no60ElementAnalysisSeries = new Set(
+    NO60_ELEMENT_ANALYSIS_DEFINITIONS
+      .map(({ id }) => id)
+      .filter((id) => requested.has(id))
+  );
+  updateNo60ElementAnalysisSeriesControls();
+  updateNo60ElementAnalysisReadout();
+  drawNo60ElementAnalysisChart();
+}
+
+function toggleNo60ElementAnalysisSeries(id) {
+  const next = new Set(state.no60ElementAnalysisSeries);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  setNo60ElementAnalysisSeries([...next]);
+}
+
+function setNo60ElementAnalysisHeight(value) {
+  const maximum = getNo60PanelMaxHeight();
+  state.no60ElementAnalysisHeight = THREE.MathUtils.clamp(
+    Number(value) || NO60_DRAWER_DEFAULT_HEIGHT,
+    NO60_DRAWER_MIN_HEIGHT,
+    maximum
+  );
+  ui.no60ElementAnalysisPanel?.style.setProperty(
+    '--no60-element-analysis-height',
+    `${state.no60ElementAnalysisHeight}px`
+  );
+  ui.no60ElementAnalysisPanel?.classList.toggle(
+    'is-collapsed',
+    state.no60ElementAnalysisHeight <= NO60_DRAWER_MIN_HEIGHT + 1
+  );
+  if (ui.no60ElementAnalysisResizer) {
+    ui.no60ElementAnalysisResizer.setAttribute('aria-valuemax', String(Math.round(maximum)));
+    ui.no60ElementAnalysisResizer.setAttribute('aria-valuenow', String(Math.round(state.no60ElementAnalysisHeight)));
+  }
+  applyAvatarScreenOffset();
+}
+
+function beginNo60ElementAnalysisDrag(event) {
+  if (EMBEDDED_VIEW || event.button !== 0) return;
+  const panel = ui.no60ElementAnalysisPanel;
+  if (!panel || panel.hidden) return;
+  state.no60ElementAnalysisDrag = {
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    startHeight: panel.getBoundingClientRect().height
+  };
+  panel.classList.add('is-dragging');
+  document.body.classList.add('resizing-no60-panel');
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+}
+
+function moveNo60ElementAnalysisPanel(event) {
+  const drag = state.no60ElementAnalysisDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  setNo60ElementAnalysisHeight(drag.startHeight - (event.clientY - drag.startY));
+}
+
+function endNo60ElementAnalysisDrag(event) {
+  const drag = state.no60ElementAnalysisDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  if (state.no60ElementAnalysisHeight < 112) setNo60ElementAnalysisHeight(NO60_DRAWER_MIN_HEIGHT);
+  ui.no60ElementAnalysisPanel?.classList.remove('is-dragging');
+  document.body.classList.remove('resizing-no60-panel');
+  if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+  state.no60ElementAnalysisDrag = null;
+}
+
+function toggleNo60ElementAnalysisCollapsed() {
+  const collapsed = state.no60ElementAnalysisHeight <= NO60_DRAWER_MIN_HEIGHT + 1;
+  setNo60ElementAnalysisHeight(collapsed ? NO60_DRAWER_DEFAULT_HEIGHT : NO60_DRAWER_MIN_HEIGHT);
+}
+
+function handleNo60ElementAnalysisResizeKey(event) {
+  const amount = event.shiftKey ? 48 : 18;
+  if (event.key === 'ArrowUp') setNo60ElementAnalysisHeight(state.no60ElementAnalysisHeight + amount);
+  else if (event.key === 'ArrowDown') setNo60ElementAnalysisHeight(state.no60ElementAnalysisHeight - amount);
+  else if (event.key === 'Home') setNo60ElementAnalysisHeight(NO60_DRAWER_MIN_HEIGHT);
+  else if (event.key === 'End') setNo60ElementAnalysisHeight(getNo60PanelMaxHeight());
+  else return;
+  event.preventDefault();
+}
+
+function captureNo60ElementAnalysisFrame(root, bones, time) {
+  const hips = bones.get('Hips');
+  const hipsPosition = hips?.getWorldPosition(new THREE.Vector3()) ?? new THREE.Vector3();
+  const anchors = { __hips: hipsPosition.toArray() };
+  for (const definition of TRACK_DEFINITIONS) {
+    const anchor = bones.get(definition.anchor)
+      ?? definition.bones.map((name) => bones.get(name)).find(Boolean);
+    if (!anchor) continue;
+    anchors[definition.id] = anchor.getWorldPosition(new THREE.Vector3())
+      .sub(hipsPosition)
+      .toArray();
+  }
+  const axisPoints = {};
+  for (const name of NO60_AXIS_POINT_BONE_NAMES) {
+    const bone = bones.get(name);
+    if (!bone) continue;
+    axisPoints[name] = bone.getWorldPosition(new THREE.Vector3())
+      .sub(hipsPosition)
+      .toArray();
+  }
+  const rotationNames = [
+    'Hips', 'Spine', 'Spine1', 'Spine2', 'Head',
+    'LeftArm', 'LeftForeArm', 'LeftHand', 'RightArm', 'RightForeArm', 'RightHand',
+    'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RightUpLeg', 'RightLeg', 'RightFoot'
+  ];
+  const rotations = {};
+  for (const name of rotationNames) {
+    const bone = bones.get(name);
+    if (bone) rotations[name] = bone.getWorldQuaternion(new THREE.Quaternion()).toArray();
+  }
+  return { time, anchors, axisPoints, rotations };
+}
+
+function analyzeCurrentMovementElements(token) {
+  if (
+    token !== state.no60ElementAnalysisToken
+    || !state.root
+    || !state.clip
+    || !state.ready
+  ) return;
+  const sampleRoot = cloneSkeleton(state.root);
+  const sampleMixer = new THREE.AnimationMixer(sampleRoot);
+  const sampleAction = sampleMixer.clipAction(state.clip);
+  sampleAction.setLoop(THREE.LoopOnce, 1);
+  sampleAction.clampWhenFinished = true;
+  sampleAction.play();
+  const sampleBones = indexBones(sampleRoot);
+  const playableDuration = Math.max(0.001, state.clip.duration - state.clipStart);
+  const sampleCount = Math.round(THREE.MathUtils.clamp(
+    playableDuration * NO60_ELEMENT_ANALYSIS_SAMPLE_RATE,
+    NO60_ELEMENT_ANALYSIS_MIN_SAMPLES,
+    NO60_ELEMENT_ANALYSIS_MAX_SAMPLES
+  ));
+  const frames = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    const progress = index / Math.max(1, sampleCount - 1);
+    const time = state.clipStart + playableDuration * progress;
+    sampleAction.time = time;
+    sampleMixer.update(0);
+    sampleRoot.updateMatrixWorld(true);
+    frames.push(captureNo60ElementAnalysisFrame(sampleRoot, sampleBones, time - state.clipStart));
+  }
+  sampleAction.stop();
+  sampleMixer.uncacheRoot(sampleRoot);
+  if (token !== state.no60ElementAnalysisToken) return;
+  state.no60ElementAnalysisData = analyzeNo60ElementFrames(frames, {
+    bodyHeight: DISPLAY_HEIGHT
+  });
+  state.no60ElementAnalysisDominance = buildNo60DominanceSegments(
+    state.no60ElementAnalysisData
+  );
+  state.no60ElementAnalysisMovementId = state.modelMovementId;
+  if (ui.no60ElementAnalysisStatus) {
+    ui.no60ElementAnalysisStatus.textContent = `${sampleCount} POSE SAMPLES · HOVER GRAPH TO INSPECT ANY TIME`;
+  }
+  updateNo60ElementAnalysisReadout();
+  drawNo60ElementAnalysisChart();
+}
+
+function scheduleNo60ElementAnalysis() {
+  const token = ++state.no60ElementAnalysisToken;
+  state.no60ElementAnalysisData = null;
+  state.no60ElementAnalysisDominance = null;
+  state.no60ElementAnalysisMovementId = null;
+  state.no60ElementAnalysisHoverProgress = null;
+  if (ui.no60ElementAnalysisStatus) {
+    ui.no60ElementAnalysisStatus.textContent = 'ANALYZING CURRENT MOVEMENT…';
+  }
+  for (const definition of NO60_ELEMENT_ANALYSIS_DEFINITIONS) {
+    const output = ui.no60ElementAnalysisValues?.querySelector(
+      `[data-no60-analysis-output="${definition.id}"]`
+    );
+    if (output) output.textContent = '—%';
+  }
+  window.setTimeout(() => analyzeCurrentMovementElements(token), 0);
+}
+
+function getNo60ElementAnalysisProgress() {
+  if (Number.isFinite(state.no60ElementAnalysisHoverProgress)) {
+    return THREE.MathUtils.clamp(state.no60ElementAnalysisHoverProgress, 0, 1);
+  }
+  return getPlaybackTiming().progress;
+}
+
+function updateNo60ElementAnalysisReadout(progress = getNo60ElementAnalysisProgress()) {
+  const sample = interpolateNo60ElementSample(state.no60ElementAnalysisData, progress);
+  if (!sample) return;
+  const dominantSegment = state.no60ElementAnalysisDominance?.find(
+    (segment) => progress >= segment.startProgress && progress <= segment.endProgress
+  );
+  const dominantDefinition = NO60_ELEMENT_ANALYSIS_DEFINITIONS.find(
+    ({ id }) => id === dominantSegment?.id
+  );
+  for (const definition of NO60_ELEMENT_ANALYSIS_DEFINITIONS) {
+    const output = ui.no60ElementAnalysisValues?.querySelector(
+      `[data-no60-analysis-output="${definition.id}"]`
+    );
+    if (output) output.textContent = `${Math.round(sample[definition.id])}%`;
+  }
+  if (ui.no60ElementAnalysisTooltip) {
+    ui.no60ElementAnalysisTooltip.innerHTML = `
+      <strong>${formatTime(sample.time)}</strong>
+      ${dominantDefinition ? `
+        <em style="--analysis-series-color:${dominantDefinition.color}">
+          DOMINANT · ${dominantDefinition.label} ${Math.round(dominantSegment.percentage)}%
+        </em>
+      ` : ''}
+      ${NO60_ELEMENT_ANALYSIS_DEFINITIONS
+        .filter((definition) => state.no60ElementAnalysisSeries.has(definition.id))
+        .map((definition) => `
+        <span><i style="--analysis-series-color:${definition.color}"></i>${definition.label}<b>${Math.round(sample[definition.id])}%</b></span>
+      `).join('')}
+    `;
+  }
+}
+
+function drawNo60ElementAnalysisChart() {
+  if (
+    !state.no60ElementAnalysisOpen
+    || state.no60ElementAnalysisGuideOpen
+    || !state.no60ElementAnalysisData?.samples.length
+  ) return;
+  const canvas = ui.no60ElementAnalysisChart;
+  if (!canvas) return;
+  const width = Math.max(1, Math.round(canvas.clientWidth));
+  const height = Math.max(1, Math.round(canvas.clientHeight));
+  const pixelRatio = Math.min(window.devicePixelRatio, 2);
+  const canvasWidth = Math.round(width * pixelRatio);
+  const canvasHeight = Math.round(height * pixelRatio);
+  if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+  }
+  const context = canvas.getContext('2d');
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  const dominance = { left: 52, right: width - 16, top: 8, bottom: 34 };
+  const plot = { left: 52, right: width - 16, top: 48, bottom: height - 30 };
+  const plotWidth = Math.max(1, plot.right - plot.left);
+  const plotHeight = Math.max(1, plot.bottom - plot.top);
+  context.fillStyle = 'rgba(2, 3, 4, 0.68)';
+  context.fillRect(plot.left, plot.top, plotWidth, plotHeight);
+  context.font = '10px Inter, system-ui, sans-serif';
+  context.textBaseline = 'middle';
+  context.fillStyle = 'rgba(255,255,255,.56)';
+  context.textAlign = 'right';
+  context.fillText('DOMINANT', dominance.left - 8, (dominance.top + dominance.bottom) * 0.5);
+  context.fillStyle = 'rgba(2, 3, 4, 0.82)';
+  context.fillRect(
+    dominance.left,
+    dominance.top,
+    dominance.right - dominance.left,
+    dominance.bottom - dominance.top
+  );
+  for (const segment of state.no60ElementAnalysisDominance ?? []) {
+    const definition = NO60_ELEMENT_ANALYSIS_DEFINITIONS.find(({ id }) => id === segment.id);
+    if (!definition) continue;
+    const left = dominance.left + segment.startProgress * plotWidth;
+    const right = dominance.left + segment.endProgress * plotWidth;
+    const sectionWidth = Math.max(1, right - left);
+    context.fillStyle = `${definition.color}cc`;
+    context.fillRect(left, dominance.top, sectionWidth, dominance.bottom - dominance.top);
+    context.strokeStyle = 'rgba(0,0,0,.46)';
+    context.strokeRect(left + 0.5, dominance.top + 0.5, Math.max(0, sectionWidth - 1), dominance.bottom - dominance.top - 1);
+    if (sectionWidth >= 58) {
+      const fullLabel = `${definition.dominanceLabel ?? definition.shortLabel ?? definition.label} · ${Math.round(segment.percentage)}%`;
+      const compactLabel = `${Math.round(segment.percentage)}%`;
+      context.save();
+      context.beginPath();
+      context.rect(left + 3, dominance.top, Math.max(0, sectionWidth - 6), dominance.bottom - dominance.top);
+      context.clip();
+      context.fillStyle = '#050607';
+      context.font = '700 9px Inter, system-ui, sans-serif';
+      context.textAlign = 'center';
+      const label = context.measureText(fullLabel).width + 10 <= sectionWidth ? fullLabel : compactLabel;
+      context.fillText(label, left + sectionWidth * 0.5, (dominance.top + dominance.bottom) * 0.5);
+      context.restore();
+    }
+  }
+  context.strokeStyle = 'rgba(255,255,255,.28)';
+  context.strokeRect(
+    dominance.left + 0.5,
+    dominance.top + 0.5,
+    dominance.right - dominance.left - 1,
+    dominance.bottom - dominance.top - 1
+  );
+  context.font = '10px Inter, system-ui, sans-serif';
+  for (const value of [0, 25, 50, 75, 100]) {
+    const y = plot.bottom - value / 100 * plotHeight;
+    context.strokeStyle = value % 50 === 0 ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.07)';
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(plot.left, y);
+    context.lineTo(plot.right, y);
+    context.stroke();
+    context.fillStyle = 'rgba(255,255,255,.56)';
+    context.textAlign = 'right';
+    context.fillText(`${value}%`, plot.left - 8, y);
+  }
+  const duration = state.no60ElementAnalysisData.duration;
+  for (const ratio of [0, 0.25, 0.5, 0.75, 1]) {
+    const x = plot.left + ratio * plotWidth;
+    context.strokeStyle = 'rgba(255,255,255,.055)';
+    context.beginPath();
+    context.moveTo(x, plot.top);
+    context.lineTo(x, plot.bottom);
+    context.stroke();
+    context.fillStyle = 'rgba(255,255,255,.48)';
+    context.textAlign = ratio === 0 ? 'left' : ratio === 1 ? 'right' : 'center';
+    context.fillText(formatTime(duration * ratio), x, plot.bottom + 17);
+  }
+  const samples = state.no60ElementAnalysisData.samples;
+  for (const definition of NO60_ELEMENT_ANALYSIS_DEFINITIONS) {
+    if (!state.no60ElementAnalysisSeries.has(definition.id)) continue;
+    context.strokeStyle = definition.color;
+    context.lineWidth = 2;
+    context.lineJoin = 'round';
+    context.lineCap = 'round';
+    context.beginPath();
+    samples.forEach((sample, index) => {
+      const x = plot.left + index / Math.max(1, samples.length - 1) * plotWidth;
+      const y = plot.bottom - sample[definition.id] / 100 * plotHeight;
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    });
+    context.stroke();
+  }
+  context.strokeStyle = 'rgba(255,255,255,.28)';
+  context.strokeRect(plot.left + 0.5, plot.top + 0.5, plotWidth - 1, plotHeight - 1);
+  const progress = getNo60ElementAnalysisProgress();
+  const cursorX = plot.left + progress * plotWidth;
+  context.strokeStyle = '#ffffff';
+  context.lineWidth = 1.2;
+  context.beginPath();
+  context.moveTo(cursorX, dominance.top);
+  context.lineTo(cursorX, plot.bottom);
+  context.stroke();
+  context.fillStyle = '#ffffff';
+  context.beginPath();
+  context.arc(cursorX, plot.top + 4, 3, 0, Math.PI * 2);
+  context.fill();
+}
+
+function setNo60ElementAnalysisOpen(open) {
+  const nextOpen = Boolean(open) && !EMBEDDED_VIEW;
+  if (nextOpen === state.no60ElementAnalysisOpen) return;
+  let reloadExpected = false;
+  if (nextOpen) {
+    if (state.sequenceActive) {
+      stopSequence();
+      reloadExpected = true;
+    }
+    if (state.mixUpActive) {
+      stopMixUp();
+      reloadExpected = true;
+    }
+    setSequenceTimelineOpen(false);
+    setMixUpPanelOpen(false);
+    if (state.no60ModificationMode) {
+      setNo60ModificationMode(false);
+      reloadExpected = true;
+    }
+  }
+  state.no60ElementAnalysisOpen = nextOpen;
+  if (ui.no60ElementAnalysisPanel) ui.no60ElementAnalysisPanel.hidden = !nextOpen;
+  ui.no60ElementAnalysisToggle?.setAttribute('aria-expanded', String(nextOpen));
+  if (ui.no60ElementAnalysisToggleStatus) {
+    ui.no60ElementAnalysisToggleStatus.textContent = nextOpen ? 'LIVE' : 'SHOW';
+  }
+  document.body.classList.toggle('no60-element-analysis-open', nextOpen);
+  if (nextOpen) {
+    setNo60ElementAnalysisHeight(state.no60ElementAnalysisHeight);
+    if (state.ready && !reloadExpected) scheduleNo60ElementAnalysis();
+  } else {
+    state.no60ElementAnalysisHoverProgress = null;
+    if (ui.no60ElementAnalysisTooltip) ui.no60ElementAnalysisTooltip.hidden = true;
+  }
+  applyAvatarScreenOffset();
+}
+
 function setNo60ModificationMode(enabled, { reloadModel = true } = {}) {
   const nextEnabled = Boolean(enabled);
   const panelOpen = nextEnabled && !EMBEDDED_VIEW;
@@ -2542,6 +3043,7 @@ function setNo60ModificationMode(enabled, { reloadModel = true } = {}) {
   }
 
   if (nextEnabled) {
+    setNo60ElementAnalysisOpen(false);
     if (state.sequenceActive) stopSequence({ reloadModel: false });
     if (state.mixUpActive) stopMixUp({ reloadModel: false });
     setSequenceTimelineOpen(false);
@@ -3648,6 +4150,8 @@ function getCurrentViewState(
     mixUpPanelOpen: state.mixUpPanelOpen,
     no60ModificationMode: state.no60ModificationMode,
     no60ModificationPanelOpen: state.no60ModificationPanelOpen,
+    no60ElementAnalysisOpen: state.no60ElementAnalysisOpen,
+    no60ElementAnalysisSeries: [...state.no60ElementAnalysisSeries].join(','),
     no60ModificationMasters: JSON.stringify(state.no60ModificationMasters),
     no60ModificationValues: JSON.stringify(state.no60ModificationValues),
     no60VisualizationTargets: JSON.stringify(state.no60VisualizationTargets),
@@ -3888,6 +4392,12 @@ function applyViewState(view) {
   if (typeof view.no60ModificationMode === 'boolean') {
     setNo60ModificationMode(view.no60ModificationMode);
   }
+  if (typeof view.no60ElementAnalysisSeries === 'string') {
+    setNo60ElementAnalysisSeries(view.no60ElementAnalysisSeries.split(',').filter(Boolean));
+  }
+  if (typeof view.no60ElementAnalysisOpen === 'boolean') {
+    setNo60ElementAnalysisOpen(view.no60ElementAnalysisOpen);
+  }
   const flowFieldViewControls = {
     thickness: view.flowFieldThickness,
     opacity: view.flowFieldOpacity,
@@ -4003,12 +4513,7 @@ function createExperimentalVisuals() {
 
   const axesGroup = new THREE.Group();
   const axisItems = [];
-  const axisBoneNames = [
-    'Hips', 'Spine2', 'Head',
-    'LeftArm', 'LeftForeArm', 'LeftHand', 'RightArm', 'RightForeArm', 'RightHand',
-    'LeftLeg', 'LeftFoot', 'RightLeg', 'RightFoot'
-  ];
-  for (const boneName of axisBoneNames) {
+  for (const boneName of NO60_AXIS_POINT_BONE_NAMES) {
     const bone = state.bones.get(boneName);
     if (!bone) continue;
     const marker = new THREE.Mesh(
@@ -5360,6 +5865,8 @@ function applyAvatarScreenOffset() {
   let bottomPanelInset = 0;
   const activeBottomPanel = state.no60ModificationPanelOpen
     ? ui.no60ModificationPanel
+    : state.no60ElementAnalysisOpen
+      ? ui.no60ElementAnalysisPanel
     : state.mixUpPanelOpen
       ? ui.mixUpPanel
       : state.sequenceTimelineOpen
@@ -5372,6 +5879,7 @@ function applyAvatarScreenOffset() {
     && (
       !document.body.classList.contains('controls-hidden')
       || activeBottomPanel === ui.no60ModificationPanel
+      || activeBottomPanel === ui.no60ElementAnalysisPanel
     )
   ) {
     const sceneBounds = ui.sceneWrap.getBoundingClientRect();
@@ -5640,6 +6148,8 @@ function prepareModel(gltf, movement) {
     if (Number.isFinite(REQUESTED_PROGRESS)) seekToProgress(REQUESTED_PROGRESS);
     if (REQUESTED_PLAYING !== null) setPlaying(REQUESTED_PLAYING);
   }
+
+  if (state.no60ElementAnalysisOpen) scheduleNo60ElementAnalysis();
 
   hideLoading();
 
@@ -6542,6 +7052,10 @@ function animate() {
   if (state.ready && state.surfaceMode === 'skeleton') updateAvatarSkeleton();
   updateSequenceProgressIndicators();
   updateTransport();
+  if (!EMBEDDED_VIEW && state.no60ElementAnalysisOpen) {
+    updateNo60ElementAnalysisReadout();
+    drawNo60ElementAnalysisChart();
+  }
   if (!EMBEDDED_VIEW) drawSignalCharts();
   renderer.render(scene, camera);
   notifyEmbeddedTransport(rawDelta);
@@ -6595,6 +7109,49 @@ ui.no60ModificationResizer?.addEventListener('pointerup', endNo60PanelDrag);
 ui.no60ModificationResizer?.addEventListener('pointercancel', endNo60PanelDrag);
 ui.no60ModificationResizer?.addEventListener('dblclick', toggleNo60PanelCollapsed);
 ui.no60ModificationResizer?.addEventListener('keydown', handleNo60PanelResizeKey);
+ui.no60ElementAnalysisToggle?.addEventListener('click', () => {
+  setNo60ElementAnalysisOpen(!state.no60ElementAnalysisOpen);
+});
+ui.no60ElementAnalysisGuideToggle?.addEventListener('click', () => {
+  setNo60ElementAnalysisGuideOpen(!state.no60ElementAnalysisGuideOpen);
+});
+ui.no60ElementAnalysisValues?.addEventListener('click', (event) => {
+  const control = event.target.closest('[data-no60-analysis-value]');
+  if (!control) return;
+  toggleNo60ElementAnalysisSeries(control.dataset.no60AnalysisValue);
+});
+ui.no60ElementAnalysisClose?.addEventListener('click', () => setNo60ElementAnalysisOpen(false));
+ui.no60ElementAnalysisResizer?.addEventListener('pointerdown', beginNo60ElementAnalysisDrag);
+ui.no60ElementAnalysisResizer?.addEventListener('pointermove', moveNo60ElementAnalysisPanel);
+ui.no60ElementAnalysisResizer?.addEventListener('pointerup', endNo60ElementAnalysisDrag);
+ui.no60ElementAnalysisResizer?.addEventListener('pointercancel', endNo60ElementAnalysisDrag);
+ui.no60ElementAnalysisResizer?.addEventListener('dblclick', toggleNo60ElementAnalysisCollapsed);
+ui.no60ElementAnalysisResizer?.addEventListener('keydown', handleNo60ElementAnalysisResizeKey);
+ui.no60ElementAnalysisChart?.addEventListener('pointermove', (event) => {
+  if (!state.no60ElementAnalysisData?.samples.length) return;
+  const bounds = ui.no60ElementAnalysisChart.getBoundingClientRect();
+  const plotLeft = 52;
+  const plotRight = Math.max(plotLeft + 1, bounds.width - 16);
+  const localX = event.clientX - bounds.left;
+  state.no60ElementAnalysisHoverProgress = THREE.MathUtils.clamp(
+    (localX - plotLeft) / (plotRight - plotLeft),
+    0,
+    1
+  );
+  updateNo60ElementAnalysisReadout();
+  drawNo60ElementAnalysisChart();
+  if (ui.no60ElementAnalysisTooltip) {
+    ui.no60ElementAnalysisTooltip.hidden = false;
+    ui.no60ElementAnalysisTooltip.style.left = `${THREE.MathUtils.clamp(localX + 12, 8, bounds.width - 190)}px`;
+    ui.no60ElementAnalysisTooltip.style.top = '12px';
+  }
+});
+ui.no60ElementAnalysisChart?.addEventListener('pointerleave', () => {
+  state.no60ElementAnalysisHoverProgress = null;
+  if (ui.no60ElementAnalysisTooltip) ui.no60ElementAnalysisTooltip.hidden = true;
+  updateNo60ElementAnalysisReadout();
+  drawNo60ElementAnalysisChart();
+});
 ui.no60ModificationControls?.addEventListener('input', (event) => {
   const masterInput = event.target.closest('[data-no60-master]');
   if (masterInput) {
@@ -6954,6 +7511,8 @@ window.addEventListener('keydown', (event) => {
 window.addEventListener('resize', () => {
   setAnalysisWidth(state.analysisWidth);
   setNo60PanelHeight(state.no60PanelHeight);
+  setNo60ElementAnalysisHeight(state.no60ElementAnalysisHeight);
+  drawNo60ElementAnalysisChart();
   resize();
 });
 new ResizeObserver(resize).observe(ui.sceneWrap);
@@ -7006,6 +7565,10 @@ setMixUpPanelOpen(false);
 buildNo60ModificationControls();
 updateNo60ModificationUi();
 if (ui.no60ModificationPanel) ui.no60ModificationPanel.hidden = true;
+buildNo60ElementAnalysisValues();
+buildNo60ElementAnalysisGuide();
+setNo60ElementAnalysisGuideOpen(false);
+if (ui.no60ElementAnalysisPanel) ui.no60ElementAnalysisPanel.hidden = true;
 setAnalysisWidth(390);
 setAnalysisVisibility(true);
 fitCamera();
