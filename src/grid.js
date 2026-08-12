@@ -13,6 +13,11 @@ const EXTRA_MODEL_URLS = import.meta.glob('../models/*.glb', {
   query: '?url',
   import: 'default'
 });
+const STANDALONE_RIG_MODEL_URLS = import.meta.glob('../glb-style-2/*.glb', {
+  eager: true,
+  query: '?url',
+  import: 'default'
+});
 
 const INDEXED_MOVEMENTS = posture.slice(0, MODEL_COUNT).map((movement, index) => ({
   ...movement,
@@ -32,7 +37,29 @@ const EXTRA_MOVEMENTS = Object.keys(EXTRA_MODEL_URLS)
     sensitivity: 'base'
   }));
 
-const MOVEMENTS = [...INDEXED_MOVEMENTS, ...EXTRA_MOVEMENTS];
+const STANDALONE_RIG_MOVEMENTS = Object.keys(STANDALONE_RIG_MODEL_URLS)
+  .map((path) => {
+    const fileName = path.split('/').at(-1);
+    return {
+      id: `glb-style-2/${fileName}`,
+      fileName,
+      modelNumber: null,
+      source: 'glb-style-2',
+      rigFamily: 'glb-style-2',
+      sequenceCompatible: false,
+      mixUpCompatible: false
+    };
+  })
+  .sort((first, second) => first.fileName.localeCompare(second.fileName, undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  }));
+
+const MOVEMENTS = [...INDEXED_MOVEMENTS, ...EXTRA_MOVEMENTS, ...STANDALONE_RIG_MOVEMENTS];
+
+function isRigCompositionCompatibleMovementId(movementId) {
+  return INDEXED_MOVEMENTS.some((movement) => movement.id === movementId);
+}
 const EFFECTS = [
   { id: 'off', label: 'OFF' },
   { id: 'energy', label: 'ENERGY' },
@@ -102,7 +129,9 @@ function movementLabel(movement) {
   if (movement.source === 'indexed') {
     return `${String(movement.modelNumber).padStart(2, '0')} · ${movement.thai} — ${movement.english.trim()}`;
   }
-  return movement.fileName;
+  return movement.source === 'glb-style-2'
+    ? `${movement.fileName} · STANDALONE RIG`
+    : movement.fileName;
 }
 
 function appendMovementOptions(select) {
@@ -110,6 +139,8 @@ function appendMovementOptions(select) {
   indexedGroup.label = '59 INDEXED MOVEMENTS';
   const modelFolderGroup = document.createElement('optgroup');
   modelFolderGroup.label = '/MODELS · FILE NAME INDEX';
+  const standaloneRigGroup = document.createElement('optgroup');
+  standaloneRigGroup.label = '/GLB-STYLE-2 · STANDALONE RIGS · NO SEQUENCE / MIX-UP';
 
   for (const movement of INDEXED_MOVEMENTS) {
     const option = document.createElement('option');
@@ -125,7 +156,14 @@ function appendMovementOptions(select) {
     modelFolderGroup.append(option);
   }
 
-  select.append(indexedGroup, modelFolderGroup);
+  for (const movement of STANDALONE_RIG_MOVEMENTS) {
+    const option = document.createElement('option');
+    option.value = movement.id;
+    option.textContent = movementLabel(movement);
+    standaloneRigGroup.append(option);
+  }
+
+  select.append(indexedGroup, modelFolderGroup, standaloneRigGroup);
 }
 
 function appendEffectOptions(select) {
@@ -191,13 +229,25 @@ function clearSequenceFromView(viewState) {
   return nextView;
 }
 
+function clearRigCompositionFromView(viewState) {
+  const nextView = clearSequenceFromView(viewState);
+  nextView.mixUpActive = false;
+  nextView.mixUpPanelOpen = false;
+  return nextView;
+}
+
 function updateCellSequenceButton(cell) {
   if (!cell?.applySequenceButton) return;
-  const available = hasSequence(cell.viewState) && cell.card.classList.contains('ready');
+  const compatible = isRigCompositionCompatibleMovementId(cell.avatarSelect.value);
+  const available = compatible
+    && hasSequence(cell.viewState)
+    && cell.card.classList.contains('ready');
   cell.applySequenceButton.disabled = !available;
   cell.applySequenceButton.title = available
     ? 'Apply this read-only movement sequence to all six avatars'
-    : 'Create a sequence in Single View first';
+    : compatible
+      ? 'Create a sequence in Single View first'
+      : 'Standalone glb-style-2 rigs cannot use sequences';
 }
 
 function setAllPlaying(playing) {
@@ -308,11 +358,14 @@ const cells = Array.from({ length: 6 }, (_, index) => {
     : EFFECTS.some((effect) => effect.id === restoredCell?.effect)
       ? restoredCell.effect
       : DEFAULT_EFFECTS[index];
-  const cellViewState = restoredCell?.view && typeof restoredCell.view === 'object'
+  const restoredCellViewState = restoredCell?.view && typeof restoredCell.view === 'object'
     ? restoredCell.view
     : restoredExperiments
       ? { experiments: restoredExperiments }
       : null;
+  const cellViewState = isRigCompositionCompatibleMovementId(cellMovement)
+    ? restoredCellViewState
+    : clearRigCompositionFromView(restoredCellViewState);
 
   const card = document.createElement('article');
   card.className = 'avatar-card';
@@ -398,10 +451,12 @@ const cells = Array.from({ length: 6 }, (_, index) => {
   };
 
   avatarSelect.addEventListener('change', () => {
-    cell.viewState = structuredClone(
+    const nextViewState = structuredClone(
       cell.viewState ?? { experiments: experimentsForEffect(effectSelect.value) }
     );
-    cell.viewState = clearSequenceFromView(cell.viewState);
+    cell.viewState = isRigCompositionCompatibleMovementId(avatarSelect.value)
+      ? clearSequenceFromView(nextViewState)
+      : clearRigCompositionFromView(nextViewState);
     updateCellSequenceButton(cell);
     card.classList.remove('ready');
     stateLabel.textContent = 'LOADING';
@@ -523,6 +578,11 @@ function applyCellSequenceToAll(sourceIndex) {
     INDEXED_MOVEMENTS.some((movement) => movement.id === movementId)
   ));
   cells.forEach((cell) => {
+    if (!isRigCompositionCompatibleMovementId(cell.avatarSelect.value)) {
+      cell.viewState = clearRigCompositionFromView(cell.viewState);
+      updateCellSequenceButton(cell);
+      return;
+    }
     cell.viewState = {
       ...(cell.viewState ?? {}),
       sequence: sourceSequence,
@@ -625,11 +685,14 @@ if (ui.speedMenuValue) ui.speedMenuValue.textContent = `${transportState.speed}�
 ui.applyAvatarAll.addEventListener('click', () => {
   prepareSynchronizedReload();
   for (const [index, cell] of cells.entries()) {
-    const preservedViewState = clearSequenceFromView(
-      cell.viewState ?? { experiments: experimentsForEffect(cell.effectSelect.value) }
-    );
+    const currentViewState = cell.viewState
+      ?? { experiments: experimentsForEffect(cell.effectSelect.value) };
+    const preservedViewState = isRigCompositionCompatibleMovementId(ui.globalAvatar.value)
+      ? clearSequenceFromView(currentViewState)
+      : clearRigCompositionFromView(currentViewState);
     cell.avatarSelect.value = ui.globalAvatar.value;
     cell.viewState = preservedViewState;
+    updateCellSequenceButton(cell);
     cell.card.classList.remove('ready');
     cell.stateLabel.textContent = 'LOADING';
     const iframeEffect = cell.effectSelect.value === 'custom' ? 'off' : cell.effectSelect.value;

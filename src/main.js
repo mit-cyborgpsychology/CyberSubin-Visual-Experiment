@@ -404,6 +404,11 @@ const EXTRA_MODEL_URLS = import.meta.glob('../models/*.glb', {
   query: '?url',
   import: 'default'
 });
+const STANDALONE_RIG_MODEL_URLS = import.meta.glob('../glb-style-2/*.glb', {
+  eager: true,
+  query: '?url',
+  import: 'default'
+});
 const INDEXED_MOVEMENTS = posture.slice(0, MODEL_COUNT).map((movement, index) => ({
   ...movement,
   id: String(index + 1),
@@ -427,7 +432,33 @@ const EXTRA_MOVEMENTS = Object.entries(EXTRA_MODEL_URLS)
     numeric: true,
     sensitivity: 'base'
   }));
-const MOVEMENTS = [...INDEXED_MOVEMENTS, ...EXTRA_MOVEMENTS];
+const STANDALONE_RIG_MOVEMENTS = Object.entries(STANDALONE_RIG_MODEL_URLS)
+  .map(([path, url]) => {
+    const fileName = path.split('/').at(-1);
+    return {
+      id: `glb-style-2/${fileName}`,
+      fileName,
+      modelNumber: null,
+      source: 'glb-style-2',
+      rigFamily: 'glb-style-2',
+      sequenceCompatible: false,
+      mixUpCompatible: false,
+      url
+    };
+  })
+  .sort((first, second) => first.fileName.localeCompare(second.fileName, undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  }));
+const MOVEMENTS = [...INDEXED_MOVEMENTS, ...EXTRA_MOVEMENTS, ...STANDALONE_RIG_MOVEMENTS];
+
+function isRigCompositionCompatible(movement) {
+  return movement?.source === 'indexed';
+}
+
+function getSelectedMovement() {
+  return MOVEMENTS.find((movement) => movement.id === ui.select.value) ?? null;
+}
 
 function createSequenceEntry(movementId, transition = {}) {
   const normalizedId = String(movementId);
@@ -982,6 +1013,8 @@ function populateMovementSelector() {
   indexedGroup.label = '59 INDEXED MOVEMENTS';
   const modelFolderGroup = document.createElement('optgroup');
   modelFolderGroup.label = '/MODELS · FILE NAME INDEX';
+  const standaloneRigGroup = document.createElement('optgroup');
+  standaloneRigGroup.label = '/GLB-STYLE-2 · STANDALONE RIGS · NO SEQUENCE / MIX-UP';
 
   INDEXED_MOVEMENTS.forEach((movement) => {
     const option = document.createElement('option');
@@ -997,7 +1030,14 @@ function populateMovementSelector() {
     modelFolderGroup.append(option);
   });
 
-  ui.select.append(indexedGroup, modelFolderGroup);
+  STANDALONE_RIG_MOVEMENTS.forEach((movement) => {
+    const option = document.createElement('option');
+    option.value = movement.id;
+    option.textContent = `${movement.fileName} · STANDALONE RIG`;
+    standaloneRigGroup.append(option);
+  });
+
+  ui.select.append(indexedGroup, modelFolderGroup, standaloneRigGroup);
 }
 
 function populateSignalRows() {
@@ -1129,7 +1169,16 @@ function resetMetricReadouts() {
   ui.torsoAngle.textContent = '—°';
 }
 
-function chooseClip(animations, modelNumber) {
+function chooseClip(animations, modelNumber, source = null) {
+  if (source === 'glb-style-2') {
+    return animations.reduce((bestClip, candidate) => {
+      const sampleCount = candidate.tracks.reduce((sum, track) => sum + track.times.length, 0);
+      const bestSampleCount = bestClip
+        ? bestClip.tracks.reduce((sum, track) => sum + track.times.length, 0)
+        : -1;
+      return sampleCount > bestSampleCount ? candidate : bestClip;
+    }, null);
+  }
   if (!Number.isInteger(modelNumber)) return animations.at(-1);
   const exactName = new RegExp(`^no0*${modelNumber}(?:_|$)`, 'i');
   return animations.find((clip) => exactName.test(clip.name)) ?? animations.at(-1);
@@ -1334,7 +1383,9 @@ function updateSequenceProgressIndicators() {
 }
 
 function setSequenceTimelineOpen(open) {
-  const nextOpen = Boolean(open) && !EMBEDDED_VIEW;
+  const nextOpen = Boolean(open)
+    && !EMBEDDED_VIEW
+    && isRigCompositionCompatible(getSelectedMovement());
   if (nextOpen && state.mixUpPanelOpen) setMixUpPanelOpen(false);
   state.sequenceTimelineOpen = nextOpen;
   ui.sequenceTimelinePanel.hidden = !state.sequenceTimelineOpen;
@@ -1349,17 +1400,27 @@ function setSequenceTimelineOpen(open) {
 
 function updateAddToSequenceAvailability() {
   const movement = MOVEMENTS.find((candidate) => candidate.id === ui.select.value);
-  const available = movement?.source === 'indexed' && state.sequence.length < MAX_SEQUENCE_LENGTH;
+  const rigCompositionCompatible = isRigCompositionCompatible(movement);
+  const available = rigCompositionCompatible && state.sequence.length < MAX_SEQUENCE_LENGTH;
   ui.addToSequence.disabled = !available;
   ui.addToSequence.title = available
     ? `Add movement ${movement.modelNumber} to the sequence`
     : state.sequence.length >= MAX_SEQUENCE_LENGTH
       ? `Sequence limit reached (${MAX_SEQUENCE_LENGTH})`
       : 'Only indexed movements 1–59 can be sequenced';
+  ui.sequenceTimelineToggle.disabled = !rigCompositionCompatible;
+  ui.sequenceTimelineToggle.title = rigCompositionCompatible
+    ? 'Show or hide the editable movement sequence'
+    : 'Standalone glb-style-2 rigs cannot use the sequence timeline';
+  ui.mixUpToggle.disabled = !rigCompositionCompatible;
+  ui.mixUpToggle.title = rigCompositionCompatible
+    ? 'Show or hide Mix-up controls'
+    : 'Standalone glb-style-2 rigs cannot use Mix-up';
 }
 
 function renderSequenceTimeline() {
   updateAddToSequenceAvailability();
+  const rigCompositionCompatible = isRigCompositionCompatible(getSelectedMovement());
   ui.speedControlLabel.textContent = state.sequence.length && state.sequenceTimelineOpen
     ? 'CURRENT'
     : 'SPEED';
@@ -1367,10 +1428,14 @@ function renderSequenceTimeline() {
   ui.applySequenceSpeedAll.title = state.sequence.length
     ? `Apply ${state.speed}× to every movement in this sequence`
     : 'Add movements to a sequence first';
-  ui.sequencePlay.disabled = state.sequence.length === 0 || state.sequencePreparing;
+  ui.sequencePlay.disabled = state.sequence.length === 0
+    || state.sequencePreparing
+    || !rigCompositionCompatible;
   ui.sequencePlay.textContent = state.sequenceActive ? 'STOP SEQUENCE' : 'PLAY SEQUENCE';
 
-  if (state.sequencePreparing) {
+  if (!rigCompositionCompatible) {
+    ui.sequenceStatus.textContent = 'STANDALONE RIG · SEQUENCE TIMELINE UNAVAILABLE';
+  } else if (state.sequencePreparing) {
     ui.sequenceStatus.textContent = `LOADING ${state.sequence.length} MOVEMENT${state.sequence.length === 1 ? '' : 'S'}…`;
   } else if (state.sequenceEnded && state.sequence.length) {
     ui.sequenceStatus.textContent = 'SEQUENCE COMPLETE · FINAL POSE HELD';
@@ -1494,7 +1559,7 @@ function loadSequenceClipData(entry) {
       movement.url,
       (gltf) => {
         try {
-          const sourceClip = chooseClip(gltf.animations, movement.modelNumber);
+          const sourceClip = chooseClip(gltf.animations, movement.modelNumber, movement.source);
           if (!sourceClip) throw new Error(`Movement ${movement.id} has no animation clip.`);
           const clip = sourceClip.clone();
           clip.name = `sequence-source-${movement.id}`;
@@ -1633,7 +1698,7 @@ async function initializeSequencePlayback() {
 }
 
 function startSequence({ startIndex = 0, previewIndex = null } = {}) {
-  if (!state.sequence.length) return;
+  if (!state.sequence.length || !isRigCompositionCompatible(getSelectedMovement())) return;
   if (state.mixUpActive) stopMixUp({ reloadModel: false });
   setMixUpPanelOpen(false);
   if (state.sequenceResumePlaying === null) state.sequenceResumePlaying = state.playing;
@@ -1864,20 +1929,23 @@ function configureMixUpSources(sources, mode = 'manual') {
 }
 
 function renderMixUpPanel() {
+  const rigCompositionCompatible = isRigCompositionCompatible(getSelectedMovement());
   ui.mixUpToggle.setAttribute('aria-expanded', String(state.mixUpPanelOpen));
   ui.mixUpToggleStatus.textContent = state.mixUpPanelOpen
     ? 'HIDE'
     : state.mixUpActive
       ? 'LIVE'
       : 'SHOW';
-  ui.mixUpPlay.disabled = state.mixUpPreparing || !state.ready;
+  ui.mixUpPlay.disabled = state.mixUpPreparing || !state.ready || !rigCompositionCompatible;
   ui.mixUpPlay.textContent = state.mixUpPreparing
     ? 'PREPARING…'
     : state.mixUpActive
       ? 'STOP MIX'
       : 'PLAY MIX';
 
-  if (state.mixUpPreparing) {
+  if (!rigCompositionCompatible) {
+    ui.mixUpStatus.textContent = 'STANDALONE RIG · MIX-UP UNAVAILABLE';
+  } else if (state.mixUpPreparing) {
     ui.mixUpStatus.textContent = 'LOADING 5 MOVEMENT LAYERS…';
   } else if (state.mixUpActive && state.mixUpReady) {
     ui.mixUpStatus.textContent = 'LIVE · 5 INDEPENDENT BODY-REGION LOOPS · SMOOTH LOOP CLOSURE';
@@ -1917,7 +1985,9 @@ function renderMixUpPanel() {
 }
 
 function setMixUpPanelOpen(open) {
-  const nextOpen = Boolean(open) && !EMBEDDED_VIEW;
+  const nextOpen = Boolean(open)
+    && !EMBEDDED_VIEW
+    && isRigCompositionCompatible(getSelectedMovement());
   if (nextOpen && state.sequenceTimelineOpen) setSequenceTimelineOpen(false);
   if (nextOpen && !state.mixUpConfigured) {
     const movementId = getCurrentIndexedMovementId();
@@ -2023,7 +2093,7 @@ async function initializeMixUpPlayback() {
 }
 
 function startMixUp() {
-  if (!state.ready) return;
+  if (!state.ready || !isRigCompositionCompatible(getSelectedMovement())) return;
   if (state.sequenceActive) stopSequence({ reloadModel: false });
   setSequenceTimelineOpen(false);
   state.mixUpActive = true;
@@ -5510,7 +5580,7 @@ function prepareModel(gltf, movement) {
   const root = gltf.scene;
   styleModel(root);
 
-  const clip = chooseClip(gltf.animations, movement.modelNumber);
+  const clip = chooseClip(gltf.animations, movement.modelNumber, movement.source);
   if (!clip) throw new Error(`Model ${movement.fileName} does not contain an animation clip.`);
   const clipStart = getTrimmedClipStart(clip);
 
@@ -5596,6 +5666,14 @@ function loadModel(movementIndex) {
 
   state.movementIndex = movementIndex;
   ui.select.value = movement.id;
+  if (!isRigCompositionCompatible(movement)) {
+    if (state.sequenceActive) stopSequence({ reloadModel: false });
+    if (state.mixUpActive) stopMixUp({ reloadModel: false });
+    setSequenceTimelineOpen(false);
+    setMixUpPanelOpen(false);
+  }
+  updateAddToSequenceAvailability();
+  renderMixUpPanel();
   if (RETURN_TO_GRID) {
     ui.gridViewLink.textContent = 'GRID VIEW';
     ui.gridViewLink.setAttribute('aria-label', 'Return to the six-avatar grid');
