@@ -980,6 +980,14 @@ body.controls-hidden .visualization-menu {
   border-left: 0;
 }
 
+.trace-body-parts [data-trace-all] {
+  grid-column: 1 / -1;
+}
+
+.avatar-style-control .avatar-opacity-control {
+  flex: 0 0 100%;
+}
+
 .trace-control::-webkit-scrollbar,
 .trace-style-control::-webkit-scrollbar { display: none; }
 

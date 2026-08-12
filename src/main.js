@@ -95,6 +95,7 @@ const DEFAULT_LIGHTING_PRESET = 'top';
 const DEFAULT_LIGHTING_COLOR = 'cool';
 const DEFAULT_LIGHTING_CUSTOM_COLOR = '#b7c9d3';
 const DEFAULT_LIGHTING_INTENSITY = 1;
+const DEFAULT_AVATAR_OPACITY = 1;
 const DEFAULT_FLOW_FIELD_SPEED = 1;
 const DEFAULT_FLOW_FIELD_COUNT = 4800;
 const DEFAULT_FLOW_FIELD_GRADIENT = 'ocean';
@@ -199,34 +200,22 @@ const TRACE_DURATION_SECONDS = {
   brief: 1.5,
   instant: 1
 };
-const DEFAULT_TRACE_REGION = 'full';
-const TRACE_REGION_TRACKER_IDS = Object.freeze({
+const TRACE_PART_TRACKER_IDS = Object.freeze({
   body: Object.freeze(['body']),
-  hands: Object.freeze(['leftHand', 'rightHand']),
-  top: Object.freeze(['leftHand', 'rightHand', 'leftArm', 'rightArm', 'head']),
-  legs: Object.freeze(['leftLeg', 'rightLeg', 'leftFoot', 'rightFoot']),
-  limbs: Object.freeze([
-    'leftHand',
-    'rightHand',
-    'leftArm',
-    'rightArm',
-    'leftLeg',
-    'rightLeg',
-    'leftFoot',
-    'rightFoot'
-  ]),
-  full: Object.freeze([
-    'leftHand',
-    'rightHand',
-    'leftArm',
-    'rightArm',
-    'leftLeg',
-    'rightLeg',
-    'leftFoot',
-    'rightFoot',
-    'head',
-    'body'
-  ])
+  hand: Object.freeze(['leftHand', 'rightHand']),
+  arm: Object.freeze(['leftArm', 'rightArm']),
+  leg: Object.freeze(['leftLeg', 'rightLeg']),
+  feet: Object.freeze(['leftFoot', 'rightFoot']),
+  head: Object.freeze(['head'])
+});
+const DEFAULT_TRACE_PARTS = Object.freeze(Object.keys(TRACE_PART_TRACKER_IDS));
+const LEGACY_TRACE_REGION_PARTS = Object.freeze({
+  body: Object.freeze(['body']),
+  hands: Object.freeze(['hand']),
+  top: Object.freeze(['hand', 'arm', 'head']),
+  legs: Object.freeze(['leg', 'feet']),
+  limbs: Object.freeze(['hand', 'arm', 'leg', 'feet']),
+  full: DEFAULT_TRACE_PARTS
 });
 const FLOOR_LIGHT_LEVELS = {
   off: { color: 0x000000 },
@@ -631,6 +620,8 @@ const ui = {
   lightingCustomColorInput: document.querySelector('#lighting-custom-color'),
   lightingIntensityInput: document.querySelector('#lighting-intensity'),
   lightingIntensityValue: document.querySelector('#lighting-intensity-value'),
+  avatarOpacityInput: document.querySelector('#avatar-opacity'),
+  avatarOpacityValue: document.querySelector('#avatar-opacity-value'),
   cameraOrbitToggle: document.querySelector('#camera-orbit-toggle'),
   cameraOrbitStatus: document.querySelector('#camera-orbit-status'),
   cameraSpeedButtons: [...document.querySelectorAll('[data-camera-speed]')],
@@ -660,7 +651,8 @@ const ui = {
   flowFieldGradientButtons: [...document.querySelectorAll('[data-flow-gradient]')],
   flowFieldDescription: document.querySelector('#flow-field-description'),
   traceModeButtons: [...document.querySelectorAll('[data-trace-mode]')],
-  traceRegionButtons: [...document.querySelectorAll('[data-trace-region]')],
+  tracePartButtons: [...document.querySelectorAll('[data-trace-part]')],
+  traceAllButton: document.querySelector('[data-trace-all]'),
   traceWidthButtons: [...document.querySelectorAll('[data-trace-width]')],
   traceVisibilityButtons: [...document.querySelectorAll('[data-trace-visible]')],
   traceDotButtons: [...document.querySelectorAll('[data-trace-dots]')],
@@ -775,6 +767,7 @@ const state = {
   lightingColor: DEFAULT_LIGHTING_COLOR,
   lightingCustomColor: DEFAULT_LIGHTING_CUSTOM_COLOR,
   lightingIntensity: DEFAULT_LIGHTING_INTENSITY,
+  avatarOpacity: DEFAULT_AVATAR_OPACITY,
   skeletonGroup: null,
   skeletonBones: [],
   skeletonConnections: [],
@@ -819,7 +812,7 @@ const state = {
   experimentFocusElapsed: 0,
   experimentTime: 0,
   traceMode: 'permanent',
-  traceRegion: DEFAULT_TRACE_REGION,
+  traceParts: new Set(DEFAULT_TRACE_PARTS),
   traceWidth: 1.25,
   traceVisible: false,
   bodyPointsVisible: false,
@@ -3093,29 +3086,40 @@ function applyAvatarAppearance() {
   avatarGradientUniforms.minY.value = state.avatarOffsetY;
   avatarGradientUniforms.maxY.value = state.avatarOffsetY + DISPLAY_HEIGHT;
   const showMesh = ['smooth', 'rough'].includes(state.surfaceMode);
-  state.root?.traverse((child) => {
-    if (!child.isMesh) return;
-    child.visible = showMesh && child.userData.cyberSubinBaseVisible !== false;
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      material.color?.set(avatarColor);
-      if ('roughness' in material) material.roughness = state.surfaceMode === 'rough' ? 0.96 : 0.38;
-      if ('metalness' in material) material.metalness = state.surfaceMode === 'rough' ? 0.01 : 0.14;
-      if ('flatShading' in material) material.flatShading = state.surfaceMode === 'rough';
-      if ('emissive' in material) {
-        material.emissive.set(state.surfaceMode === 'rough' ? '#030506' : '#071012');
-        material.emissiveIntensity = state.surfaceMode === 'rough' ? 0.05 : 0.18;
+  const avatarVisible = state.avatarOpacity > 0.001;
+  for (const root of [state.root, state.no60OriginalRoot]) {
+    root?.traverse((child) => {
+      if (!child.isMesh) return;
+      child.visible = avatarVisible && showMesh && child.userData.cyberSubinBaseVisible !== false;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        material.color?.set(avatarColor);
+        material.opacity = state.avatarOpacity;
+        material.transparent = state.avatarOpacity < 0.999;
+        material.depthWrite = state.avatarOpacity >= 0.999;
+        if ('roughness' in material) material.roughness = state.surfaceMode === 'rough' ? 0.96 : 0.38;
+        if ('metalness' in material) material.metalness = state.surfaceMode === 'rough' ? 0.01 : 0.14;
+        if ('flatShading' in material) material.flatShading = state.surfaceMode === 'rough';
+        if ('emissive' in material) {
+          material.emissive.set(state.surfaceMode === 'rough' ? '#030506' : '#071012');
+          material.emissiveIntensity = state.surfaceMode === 'rough' ? 0.05 : 0.18;
+        }
+        material.needsUpdate = true;
       }
-      material.needsUpdate = true;
-    }
-  });
+    });
+  }
 
-  if (state.pointCloudGroup) state.pointCloudGroup.visible = state.surfaceMode === 'points';
-  for (const entry of state.pointCloudEntries) entry.points.material.color.set('#ffffff');
+  if (state.pointCloudGroup) state.pointCloudGroup.visible = avatarVisible && state.surfaceMode === 'points';
+  for (const entry of state.pointCloudEntries) {
+    entry.points.material.color.set('#ffffff');
+    entry.points.material.opacity = state.avatarOpacity;
+  }
   if (state.skeletonGroup) {
-    state.skeletonGroup.visible = state.surfaceMode === 'skeleton';
+    state.skeletonGroup.visible = avatarVisible && state.surfaceMode === 'skeleton';
     state.skeletonLine?.material.color.set('#ffffff');
     state.skeletonJoints?.material.color.set('#ffffff');
+    if (state.skeletonLine?.material) state.skeletonLine.material.opacity = state.avatarOpacity;
+    if (state.skeletonJoints?.material) state.skeletonJoints.material.opacity = state.avatarOpacity;
   }
   if (state.surfaceMode === 'points') updateAvatarPointCloud();
   if (state.surfaceMode === 'skeleton') updateAvatarSkeleton();
@@ -3293,6 +3297,15 @@ function setLightingIntensity(value) {
   applyLightingSetup();
 }
 
+function setAvatarOpacity(value) {
+  const opacity = THREE.MathUtils.clamp(Number(value) || 0, 0, 1);
+  state.avatarOpacity = Number(opacity.toFixed(2));
+  ui.avatarOpacityInput.value = String(state.avatarOpacity);
+  ui.avatarOpacityInput.style.setProperty('--flow-slider-progress', `${state.avatarOpacity * 100}%`);
+  ui.avatarOpacityValue.textContent = `${Math.round(state.avatarOpacity * 100)}%`;
+  applyAvatarAppearance();
+}
+
 function normalizeModel(root) {
   root.updateMatrixWorld(true);
   const bounds = new THREE.Box3().setFromObject(root);
@@ -3314,8 +3327,8 @@ function indexBones(root) {
   return bones;
 }
 
-function traceRegionIncludesTracker(trackerId, region = state.traceRegion) {
-  return TRACE_REGION_TRACKER_IDS[region]?.includes(trackerId) ?? false;
+function tracePartsIncludeTracker(trackerId, parts = state.traceParts) {
+  return [...parts].some((part) => TRACE_PART_TRACKER_IDS[part]?.includes(trackerId));
 }
 
 function createTrackers() {
@@ -3352,7 +3365,7 @@ function createTrackers() {
     );
     trail.frustumCulled = false;
     trail.renderOrder = 8;
-    trail.visible = state.traceVisible && traceRegionIncludesTracker(definition.id);
+    trail.visible = state.traceVisible && tracePartsIncludeTracker(definition.id);
     analysisObjects.add(trail);
 
     const trailDotsGeometry = new THREE.BufferGeometry();
@@ -3378,7 +3391,7 @@ function createTrackers() {
     trailDots.renderOrder = 9;
     trailDots.visible = state.traceVisible
       && state.traceDots
-      && traceRegionIncludesTracker(definition.id);
+      && tracePartsIncludeTracker(definition.id);
     analysisObjects.add(trailDots);
 
     return {
@@ -3537,10 +3550,11 @@ function getCurrentViewState(
     lightingColor: state.lightingColor,
     lightingCustomColor: state.lightingCustomColor,
     lightingIntensity: state.lightingIntensity,
+    avatarOpacity: state.avatarOpacity,
     traceVisible: state.traceVisible,
     bodyPointsVisible: state.bodyPointsVisible,
     traceMode: state.traceMode,
-    traceRegion: state.traceRegion,
+    traceParts: [...state.traceParts].join(','),
     traceWidth: state.traceWidth,
     traceDots: state.traceDots,
     traceSmoothing: state.traceSmoothing,
@@ -3650,14 +3664,14 @@ function applyViewState(view) {
     setLightingColor(view.lightingColor, ui.lightingColorButtons.find((button) => button.dataset.lightingColor === view.lightingColor));
   }
   if (Number.isFinite(Number(view.lightingIntensity))) setLightingIntensity(view.lightingIntensity);
+  if (Number.isFinite(Number(view.avatarOpacity))) setAvatarOpacity(view.avatarOpacity);
   if (typeof view.traceVisible === 'boolean') setTraceVisibility(view.traceVisible);
   if (typeof view.bodyPointsVisible === 'boolean') setBodyPointsVisibility(view.bodyPointsVisible);
   if (view.traceMode) setTraceMode(view.traceMode, ui.traceModeButtons.find((button) => button.dataset.traceMode === view.traceMode));
-  if (view.traceRegion) {
-    setTraceRegion(
-      view.traceRegion,
-      ui.traceRegionButtons.find((button) => button.dataset.traceRegion === view.traceRegion)
-    );
+  if (typeof view.traceParts === 'string') {
+    setTraceParts(view.traceParts.split(',').filter(Boolean));
+  } else if (view.traceRegion && LEGACY_TRACE_REGION_PARTS[view.traceRegion]) {
+    setTraceParts(LEGACY_TRACE_REGION_PARTS[view.traceRegion]);
   }
   if (Number.isFinite(Number(view.traceWidth))) {
     const width = Number(view.traceWidth);
@@ -5844,21 +5858,45 @@ function setTraceMode(mode, activeButton) {
   state.trackers.forEach(updateTrailGeometry);
 }
 
-function setTraceRegion(region, activeButton) {
-  if (!(region in TRACE_REGION_TRACKER_IDS)) return;
-  state.traceRegion = region;
-  state.trailElapsed = 0;
-  ui.traceRegionButtons.forEach((button) => {
-    const selected = button === activeButton;
+function syncTracePartButtons() {
+  ui.tracePartButtons.forEach((button) => {
+    const selected = state.traceParts.has(button.dataset.tracePart);
     button.classList.toggle('active', selected);
     button.setAttribute('aria-pressed', String(selected));
   });
+  const allSelected = DEFAULT_TRACE_PARTS.every((part) => state.traceParts.has(part));
+  ui.traceAllButton?.classList.toggle('active', allSelected);
+  ui.traceAllButton?.setAttribute('aria-pressed', String(allSelected));
+}
+
+function applyTracePartSelection() {
+  state.trailElapsed = 0;
+  syncTracePartButtons();
   state.trackers.forEach((tracker) => {
     clearTrailGeometry(tracker);
-    const selected = traceRegionIncludesTracker(tracker.definition.id);
+    const selected = tracePartsIncludeTracker(tracker.definition.id);
     tracker.trail.visible = state.traceVisible && selected;
     tracker.trailDots.visible = state.traceVisible && state.traceDots && selected;
   });
+}
+
+function setTraceParts(parts) {
+  const validParts = [...new Set(parts)].filter((part) => part in TRACE_PART_TRACKER_IDS);
+  state.traceParts = new Set(validParts.length ? validParts : DEFAULT_TRACE_PARTS);
+  applyTracePartSelection();
+}
+
+function toggleTracePart(part) {
+  if (!(part in TRACE_PART_TRACKER_IDS)) return;
+  const nextParts = new Set(state.traceParts);
+  if (nextParts.has(part)) {
+    if (nextParts.size === 1) return;
+    nextParts.delete(part);
+  } else {
+    nextParts.add(part);
+  }
+  state.traceParts = nextParts;
+  applyTracePartSelection();
 }
 
 function setTraceVisibility(visible) {
@@ -5871,7 +5909,7 @@ function setTraceVisibility(visible) {
   ui.lineDisplayStatus.textContent = visible ? 'ON' : 'OFF';
   if (!visible) state.trailElapsed = 0;
   state.trackers.forEach((tracker) => {
-    const selected = traceRegionIncludesTracker(tracker.definition.id);
+    const selected = tracePartsIncludeTracker(tracker.definition.id);
     if (visible) updateTrailGeometry(tracker);
     else tracker.hasTrailPoint = false;
     tracker.trail.visible = visible && selected;
@@ -5895,7 +5933,7 @@ function setTraceDots(showDots, activeButton) {
   state.trackers.forEach((tracker) => {
     tracker.trailDots.visible = state.traceVisible
       && showDots
-      && traceRegionIncludesTracker(tracker.definition.id);
+      && tracePartsIncludeTracker(tracker.definition.id);
   });
 }
 
@@ -6232,7 +6270,7 @@ function updateMotionSignals(delta, shouldSample, trailSampling = null) {
       if (tracker.history.average.length > SIGNAL_WINDOW) tracker.history.average.shift();
     }
 
-    if (trailSampling?.count > 0 && traceRegionIncludesTracker(tracker.definition.id)) {
+    if (trailSampling?.count > 0 && tracePartsIncludeTracker(tracker.definition.id)) {
       for (let sampleIndex = 0; sampleIndex < trailSampling.count; sampleIndex += 1) {
         const sampleTime = trailSampling.interval * (sampleIndex + 1) - trailSampling.elapsedBeforeFrame;
         const interpolation = THREE.MathUtils.clamp(sampleTime / trailSampling.frameDelta, 0, 1);
@@ -6652,6 +6690,10 @@ ui.lightingIntensityInput.addEventListener('input', () => {
   setLightingIntensity(ui.lightingIntensityInput.value);
 });
 
+ui.avatarOpacityInput.addEventListener('input', () => {
+  setAvatarOpacity(ui.avatarOpacityInput.value);
+});
+
 for (const button of ui.cameraSpeedButtons) {
   button.addEventListener('click', () => setCameraOrbitSpeed(Number(button.dataset.cameraSpeed), button));
 }
@@ -6691,9 +6733,11 @@ for (const button of ui.traceModeButtons) {
   button.addEventListener('click', () => setTraceMode(button.dataset.traceMode, button));
 }
 
-for (const button of ui.traceRegionButtons) {
-  button.addEventListener('click', () => setTraceRegion(button.dataset.traceRegion, button));
+for (const button of ui.tracePartButtons) {
+  button.addEventListener('click', () => toggleTracePart(button.dataset.tracePart));
 }
+
+ui.traceAllButton.addEventListener('click', () => setTraceParts(DEFAULT_TRACE_PARTS));
 
 for (const button of ui.traceWidthButtons) {
   button.addEventListener('click', () => setTraceWidth(Number(button.dataset.traceWidth), button));
@@ -6858,7 +6902,7 @@ populateSignalRows();
 setGraphMode('all', ui.graphModeButtons.find((button) => button.dataset.graphMode === 'all'));
 setFloorLight('off', ui.floorLightButtons.find((button) => button.dataset.floorLight === 'off'));
 setTraceMode('permanent', ui.traceModeButtons.find((button) => button.dataset.traceMode === 'permanent'));
-setTraceRegion(DEFAULT_TRACE_REGION, ui.traceRegionButtons.find((button) => button.dataset.traceRegion === DEFAULT_TRACE_REGION));
+setTraceParts(DEFAULT_TRACE_PARTS);
 setTraceDots(false, ui.traceDotButtons.find((button) => button.dataset.traceDots === 'false'));
 setTraceSmoothing(true, ui.traceSmoothingButtons.find((button) => button.dataset.traceSmoothing === 'true'));
 setTraceSampleRate(30, ui.traceSampleRateButtons.find((button) => button.dataset.traceSampleRate === '30'));
@@ -6868,6 +6912,7 @@ setAvatarSurface(DEFAULT_SURFACE_MODE, ui.avatarSurfaceButtons.find((button) => 
 setLightingPreset(DEFAULT_LIGHTING_PRESET, ui.lightingPresetButtons.find((button) => button.dataset.lightingPreset === DEFAULT_LIGHTING_PRESET));
 setLightingColor(DEFAULT_LIGHTING_COLOR, ui.lightingColorButtons.find((button) => button.dataset.lightingColor === DEFAULT_LIGHTING_COLOR));
 setLightingIntensity(DEFAULT_LIGHTING_INTENSITY);
+setAvatarOpacity(DEFAULT_AVATAR_OPACITY);
 setCameraControlsOpen(false);
 setLineControlsOpen(false);
 setVisualizationMenu(false);
