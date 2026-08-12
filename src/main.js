@@ -199,6 +199,35 @@ const TRACE_DURATION_SECONDS = {
   brief: 1.5,
   instant: 1
 };
+const DEFAULT_TRACE_REGION = 'full';
+const TRACE_REGION_TRACKER_IDS = Object.freeze({
+  body: Object.freeze(['body']),
+  hands: Object.freeze(['leftHand', 'rightHand']),
+  top: Object.freeze(['leftHand', 'rightHand', 'leftArm', 'rightArm', 'head']),
+  legs: Object.freeze(['leftLeg', 'rightLeg', 'leftFoot', 'rightFoot']),
+  limbs: Object.freeze([
+    'leftHand',
+    'rightHand',
+    'leftArm',
+    'rightArm',
+    'leftLeg',
+    'rightLeg',
+    'leftFoot',
+    'rightFoot'
+  ]),
+  full: Object.freeze([
+    'leftHand',
+    'rightHand',
+    'leftArm',
+    'rightArm',
+    'leftLeg',
+    'rightLeg',
+    'leftFoot',
+    'rightFoot',
+    'head',
+    'body'
+  ])
+});
 const FLOOR_LIGHT_LEVELS = {
   off: { color: 0x000000 },
   low: { color: 0x020303 },
@@ -631,6 +660,7 @@ const ui = {
   flowFieldGradientButtons: [...document.querySelectorAll('[data-flow-gradient]')],
   flowFieldDescription: document.querySelector('#flow-field-description'),
   traceModeButtons: [...document.querySelectorAll('[data-trace-mode]')],
+  traceRegionButtons: [...document.querySelectorAll('[data-trace-region]')],
   traceWidthButtons: [...document.querySelectorAll('[data-trace-width]')],
   traceVisibilityButtons: [...document.querySelectorAll('[data-trace-visible]')],
   traceDotButtons: [...document.querySelectorAll('[data-trace-dots]')],
@@ -789,6 +819,7 @@ const state = {
   experimentFocusElapsed: 0,
   experimentTime: 0,
   traceMode: 'permanent',
+  traceRegion: DEFAULT_TRACE_REGION,
   traceWidth: 1.25,
   traceVisible: false,
   bodyPointsVisible: false,
@@ -3283,6 +3314,10 @@ function indexBones(root) {
   return bones;
 }
 
+function traceRegionIncludesTracker(trackerId, region = state.traceRegion) {
+  return TRACE_REGION_TRACKER_IDS[region]?.includes(trackerId) ?? false;
+}
+
 function createTrackers() {
   state.trackers = TRACK_DEFINITIONS.map((definition) => {
     const trackedBones = definition.bones.map((name) => state.bones.get(name)).filter(Boolean);
@@ -3317,7 +3352,7 @@ function createTrackers() {
     );
     trail.frustumCulled = false;
     trail.renderOrder = 8;
-    trail.visible = state.traceVisible;
+    trail.visible = state.traceVisible && traceRegionIncludesTracker(definition.id);
     analysisObjects.add(trail);
 
     const trailDotsGeometry = new THREE.BufferGeometry();
@@ -3341,7 +3376,9 @@ function createTrackers() {
     );
     trailDots.frustumCulled = false;
     trailDots.renderOrder = 9;
-    trailDots.visible = state.traceVisible && state.traceDots;
+    trailDots.visible = state.traceVisible
+      && state.traceDots
+      && traceRegionIncludesTracker(definition.id);
     analysisObjects.add(trailDots);
 
     return {
@@ -3503,6 +3540,7 @@ function getCurrentViewState(
     traceVisible: state.traceVisible,
     bodyPointsVisible: state.bodyPointsVisible,
     traceMode: state.traceMode,
+    traceRegion: state.traceRegion,
     traceWidth: state.traceWidth,
     traceDots: state.traceDots,
     traceSmoothing: state.traceSmoothing,
@@ -3615,6 +3653,12 @@ function applyViewState(view) {
   if (typeof view.traceVisible === 'boolean') setTraceVisibility(view.traceVisible);
   if (typeof view.bodyPointsVisible === 'boolean') setBodyPointsVisibility(view.bodyPointsVisible);
   if (view.traceMode) setTraceMode(view.traceMode, ui.traceModeButtons.find((button) => button.dataset.traceMode === view.traceMode));
+  if (view.traceRegion) {
+    setTraceRegion(
+      view.traceRegion,
+      ui.traceRegionButtons.find((button) => button.dataset.traceRegion === view.traceRegion)
+    );
+  }
   if (Number.isFinite(Number(view.traceWidth))) {
     const width = Number(view.traceWidth);
     setTraceWidth(width, ui.traceWidthButtons.find((button) => Number(button.dataset.traceWidth) === width));
@@ -5800,6 +5844,23 @@ function setTraceMode(mode, activeButton) {
   state.trackers.forEach(updateTrailGeometry);
 }
 
+function setTraceRegion(region, activeButton) {
+  if (!(region in TRACE_REGION_TRACKER_IDS)) return;
+  state.traceRegion = region;
+  state.trailElapsed = 0;
+  ui.traceRegionButtons.forEach((button) => {
+    const selected = button === activeButton;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  state.trackers.forEach((tracker) => {
+    clearTrailGeometry(tracker);
+    const selected = traceRegionIncludesTracker(tracker.definition.id);
+    tracker.trail.visible = state.traceVisible && selected;
+    tracker.trailDots.visible = state.traceVisible && state.traceDots && selected;
+  });
+}
+
 function setTraceVisibility(visible) {
   state.traceVisible = visible;
   ui.traceVisibilityButtons.forEach((button) => {
@@ -5810,10 +5871,11 @@ function setTraceVisibility(visible) {
   ui.lineDisplayStatus.textContent = visible ? 'ON' : 'OFF';
   if (!visible) state.trailElapsed = 0;
   state.trackers.forEach((tracker) => {
+    const selected = traceRegionIncludesTracker(tracker.definition.id);
     if (visible) updateTrailGeometry(tracker);
     else tracker.hasTrailPoint = false;
-    tracker.trail.visible = visible;
-    tracker.trailDots.visible = visible && state.traceDots;
+    tracker.trail.visible = visible && selected;
+    tracker.trailDots.visible = visible && state.traceDots && selected;
   });
 }
 
@@ -5831,7 +5893,9 @@ function setTraceDots(showDots, activeButton) {
   state.traceDots = showDots;
   ui.traceDotButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
   state.trackers.forEach((tracker) => {
-    tracker.trailDots.visible = state.traceVisible && showDots;
+    tracker.trailDots.visible = state.traceVisible
+      && showDots
+      && traceRegionIncludesTracker(tracker.definition.id);
   });
 }
 
@@ -6168,7 +6232,7 @@ function updateMotionSignals(delta, shouldSample, trailSampling = null) {
       if (tracker.history.average.length > SIGNAL_WINDOW) tracker.history.average.shift();
     }
 
-    if (trailSampling?.count > 0) {
+    if (trailSampling?.count > 0 && traceRegionIncludesTracker(tracker.definition.id)) {
       for (let sampleIndex = 0; sampleIndex < trailSampling.count; sampleIndex += 1) {
         const sampleTime = trailSampling.interval * (sampleIndex + 1) - trailSampling.elapsedBeforeFrame;
         const interpolation = THREE.MathUtils.clamp(sampleTime / trailSampling.frameDelta, 0, 1);
@@ -6627,6 +6691,10 @@ for (const button of ui.traceModeButtons) {
   button.addEventListener('click', () => setTraceMode(button.dataset.traceMode, button));
 }
 
+for (const button of ui.traceRegionButtons) {
+  button.addEventListener('click', () => setTraceRegion(button.dataset.traceRegion, button));
+}
+
 for (const button of ui.traceWidthButtons) {
   button.addEventListener('click', () => setTraceWidth(Number(button.dataset.traceWidth), button));
 }
@@ -6790,6 +6858,7 @@ populateSignalRows();
 setGraphMode('all', ui.graphModeButtons.find((button) => button.dataset.graphMode === 'all'));
 setFloorLight('off', ui.floorLightButtons.find((button) => button.dataset.floorLight === 'off'));
 setTraceMode('permanent', ui.traceModeButtons.find((button) => button.dataset.traceMode === 'permanent'));
+setTraceRegion(DEFAULT_TRACE_REGION, ui.traceRegionButtons.find((button) => button.dataset.traceRegion === DEFAULT_TRACE_REGION));
 setTraceDots(false, ui.traceDotButtons.find((button) => button.dataset.traceDots === 'false'));
 setTraceSmoothing(true, ui.traceSmoothingButtons.find((button) => button.dataset.traceSmoothing === 'true'));
 setTraceSampleRate(30, ui.traceSampleRateButtons.find((button) => button.dataset.traceSampleRate === '30'));

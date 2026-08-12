@@ -8,6 +8,7 @@ const STRING_PARAMETERS = [
   'lightingColor',
   'lightingCustomColor',
   'traceMode',
+  'traceRegion',
   'floorLight',
   'graphMode',
   'flowFieldGradient',
