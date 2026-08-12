@@ -78,16 +78,25 @@
 
         <div class="grid-speed-control" aria-label="Six-avatar playback speed">
           <span>SPEED</span>
-          <button type="button" data-grid-speed="0.05">0.05×</button>
-          <button type="button" data-grid-speed="0.1">0.1×</button>
-          <button type="button" data-grid-speed="0.5">0.5×</button>
-          <button type="button" data-grid-speed="1">1×</button>
-          <button type="button" data-grid-speed="1.5">1.5×</button>
-          <button type="button" data-grid-speed="2">2×</button>
-          <button type="button" data-grid-speed="3" class="active">3×</button>
-          <button type="button" data-grid-speed="4">4×</button>
-          <button type="button" data-grid-speed="5">5×</button>
-          <button type="button" data-grid-speed="10">10×</button>
+          <details id="grid-speed-menu" class="grid-speed-menu">
+            <summary aria-label="Choose six-avatar playback speed">
+              <strong id="grid-speed-value">3×</strong>
+              <span class="grid-speed-menu__chevron" aria-hidden="true">⌃</span>
+            </summary>
+            <div class="grid-speed-menu__options" role="radiogroup" aria-label="Six-avatar playback speed options">
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="0.05">0.05×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="0.1">0.1×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="0.5">0.5×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="1">1×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="1.5">1.5×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="2">2×</button>
+              <button type="button" role="radio" aria-checked="true" data-grid-speed="3" class="active">3×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="4">4×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="5">5×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="10">10×</button>
+              <button type="button" role="radio" aria-checked="false" data-grid-speed="50">50×</button>
+            </div>
+          </details>
         </div>
 
         <button id="restart-all" class="restart-all" type="button">RESTART ALL</button>

@@ -470,7 +470,7 @@ body.interface-hidden .avatar-grid {
   grid-row: 4;
   min-width: 0;
   display: grid;
-  grid-template-columns: 112px 132px minmax(180px, 1fr) auto 118px;
+  grid-template-columns: 112px 132px minmax(180px, 1fr) 190px 118px;
   align-items: stretch;
   border-top: 1px solid var(--line);
   background: rgba(6, 8, 10, 0.98);
@@ -573,8 +573,11 @@ body.interface-hidden .avatar-grid {
 }
 
 .grid-speed-control {
+  position: relative;
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border-left: 1px solid var(--line);
 }
 
@@ -587,10 +590,62 @@ body.interface-hidden .avatar-grid {
 }
 
 .grid-speed-control button {
-  min-width: 34px;
-  padding: 0 6px;
+  min-width: 48px;
+  padding: 8px 6px;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
+}
+
+.grid-speed-menu { position: relative; }
+
+.grid-speed-menu summary {
+  min-width: 76px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(101, 243, 255, 0.3);
+  padding: 0 10px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.grid-speed-menu summary::-webkit-details-marker { display: none; }
+.grid-speed-menu summary:hover,
+.grid-speed-menu[open] summary { background: rgba(101, 243, 255, 0.08); }
+.grid-speed-menu__chevron { display: inline-block; transition: transform 160ms ease; }
+.grid-speed-menu[open] .grid-speed-menu__chevron { transform: rotate(180deg); }
+
+.grid-speed-menu__options {
+  position: absolute;
+  z-index: 80;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: 148px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  border: 1px solid rgba(101, 243, 255, 0.42);
+  background: rgba(4, 6, 8, 0.98);
+  box-shadow: 0 -12px 35px rgba(0, 0, 0, 0.55);
+  transform: translateX(-50%);
+}
+
+.grid-speed-control .grid-speed-menu__options button {
+  min-height: 40px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: rgba(226, 231, 234, 0.52);
+}
+
+.grid-speed-control .grid-speed-menu__options button:nth-child(2n) { border-right: 0; }
+.grid-speed-control .grid-speed-menu__options button:nth-last-child(-n + 2) { border-bottom: 0; }
+.grid-speed-control .grid-speed-menu__options button.active {
+  color: #fff;
+  background: rgba(101, 243, 255, 0.16);
 }
 
 @media (max-height: 800px) {

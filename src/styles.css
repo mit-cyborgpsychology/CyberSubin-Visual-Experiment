@@ -1528,7 +1528,7 @@ body.resizing-panel * {
   z-index: 20;
   min-width: 0;
   display: grid;
-  grid-template-columns: 70px 135px minmax(180px, 1fr) 430px 112px;
+  grid-template-columns: 70px 135px minmax(180px, 1fr) 250px 112px;
   align-items: center;
   border-top: 1px solid var(--line);
   background: #080a0c;
@@ -1636,6 +1636,7 @@ body.resizing-panel * {
 }
 
 .speed-control {
+  position: relative;
   height: 100%;
   display: flex;
   align-items: center;
@@ -1651,10 +1652,10 @@ body.resizing-panel * {
 }
 
 .speed-control button {
-  min-width: 27px;
-  padding: 7px 4px;
+  min-width: 48px;
+  padding: 9px 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.07em;
 }
 
@@ -1662,6 +1663,75 @@ body.resizing-panel * {
 .speed-control button.active {
   color: var(--accent);
   background: rgba(101, 243, 255, 0.07);
+}
+
+.speed-menu {
+  position: relative;
+}
+
+.speed-menu summary {
+  min-width: 82px;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(101, 243, 255, 0.28);
+  padding: 0 12px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}
+
+.speed-menu summary::-webkit-details-marker { display: none; }
+
+.speed-menu summary:hover,
+.speed-menu[open] summary {
+  border-color: rgba(101, 243, 255, 0.7);
+  background: rgba(101, 243, 255, 0.08);
+}
+
+.speed-menu__chevron {
+  display: inline-block;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.speed-menu[open] .speed-menu__chevron { transform: rotate(180deg); }
+
+.speed-menu__options {
+  position: absolute;
+  z-index: 80;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: 152px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  border: 1px solid rgba(101, 243, 255, 0.42);
+  background: rgba(4, 6, 8, 0.98);
+  box-shadow: 0 -12px 35px rgba(0, 0, 0, 0.55);
+  transform: translateX(-50%);
+}
+
+.speed-control .speed-menu__options button {
+  min-height: 42px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: rgba(226, 231, 234, 0.52);
+  font-size: 11px;
+}
+
+.speed-control .speed-menu__options button:nth-child(2n) { border-right: 0; }
+.speed-control .speed-menu__options button:nth-last-child(-n + 2) { border-bottom: 0; }
+.speed-control .speed-menu__options button.active {
+  color: #fff;
+  background: rgba(101, 243, 255, 0.16);
 }
 
 .speed-control .speed-apply-all {
@@ -1765,18 +1835,18 @@ body.embedded-view .axis-widget {
   .transport {
     position: sticky;
     bottom: 0;
-    grid-template-columns: 62px 100px minmax(80px, 1fr) minmax(230px, 280px) 58px;
+    grid-template-columns: 62px 100px minmax(80px, 1fr) minmax(190px, 230px) 58px;
   }
   .play-button { width: 62px; }
   .speed-control {
     min-width: 0;
-    flex-wrap: wrap;
-    align-content: center;
-    gap: 0;
+    gap: 5px;
     padding: 3px 4px;
   }
-  .speed-control > span { width: 100%; margin: 0; text-align: center; font-size: 7px; }
-  .speed-control button { min-width: 23px; padding: 4px 2px; font-size: 8px; }
+  .speed-control > span { margin: 0; font-size: 7px; }
+  .speed-control button { min-width: 46px; padding: 6px 4px; font-size: 8px; }
+  .speed-menu summary { min-width: 66px; min-height: 30px; padding: 0 8px; font-size: 9px; }
+  .speed-menu__options { width: 134px; }
   .reset-button { font-size: 0; }
 }
 
@@ -3055,6 +3125,18 @@ body.embedded-view .axis-widget {
   color: var(--accent);
 }
 
+.sequence-timeline-actions #sequence-add-all {
+  border-color: rgba(101, 243, 255, 0.72);
+  background: var(--accent);
+  color: #020405;
+}
+
+.sequence-timeline-actions #sequence-add-all:hover:not(:disabled),
+.sequence-timeline-actions #sequence-add-all:focus-visible {
+  background: #a5f8ff;
+  color: #020405;
+}
+
 .sequence-timeline-actions #sequence-random-five:hover:not(:disabled) {
   background: var(--accent) !important;
   color: #020405;
@@ -3855,6 +3937,20 @@ body.no60-modification-mode .no60-modification-control {
 .no60-modification-heading #no60-modification-reset:focus-visible {
   background: #ff766c !important;
   color: #050607;
+}
+
+/* Keep the primary sequence-construction action legible after the shared
+   bottom-drawer button rules and focus states are applied. */
+#sequence-timeline-panel #sequence-add-all {
+  border-color: #65f3ff !important;
+  background: #65f3ff !important;
+  color: #020405 !important;
+}
+
+#sequence-timeline-panel #sequence-add-all:hover:not(:disabled),
+#sequence-timeline-panel #sequence-add-all:focus-visible {
+  background: #a5f8ff !important;
+  color: #020405 !important;
 }
 
 .no60-modification-resizer {

@@ -5,6 +5,7 @@ import './grid.css';
 const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
 const DEFAULT_SPEED = 3;
+const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10, 50]);
 const GRID_STATE_KEY = 'cyber-subin-six-avatar-state';
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const EXTRA_MODEL_URLS = import.meta.glob('../models/*.glb', {
@@ -73,6 +74,8 @@ const ui = {
   totalTime: document.querySelector('#grid-total-time'),
   timeline: document.querySelector('#grid-timeline'),
   speedButtons: [...document.querySelectorAll('[data-grid-speed]')],
+  speedMenu: document.querySelector('#grid-speed-menu'),
+  speedMenuValue: document.querySelector('#grid-speed-value'),
   singleViewLink: document.querySelector('#single-view-link'),
   hideControlButtons: document.querySelector('#hide-control-buttons'),
   hideAllUi: document.querySelector('#hide-all-ui')
@@ -80,7 +83,9 @@ const ui = {
 
 const transportState = {
   playing: restoredGridState?.transport?.playing ?? true,
-  speed: Number(restoredGridState?.transport?.speed) || DEFAULT_SPEED,
+  speed: PLAYBACK_SPEED_OPTIONS.includes(Number(restoredGridState?.transport?.speed))
+    ? Number(restoredGridState.transport.speed)
+    : DEFAULT_SPEED,
   progress: Math.max(0, Math.min(1, Number(restoredGridState?.transport?.progress) || 0)),
   scrubbing: false,
   resumeAfterScrub: false
@@ -204,10 +209,14 @@ function setAllPlaying(playing) {
 }
 
 function setAllSpeed(speed) {
+  if (!PLAYBACK_SPEED_OPTIONS.includes(speed)) return;
   transportState.speed = speed;
   ui.speedButtons.forEach((button) => {
-    button.classList.toggle('active', Number(button.dataset.gridSpeed) === speed);
+    const active = Number(button.dataset.gridSpeed) === speed;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-checked', String(active));
   });
+  if (ui.speedMenuValue) ui.speedMenuValue.textContent = `${speed}×`;
   sendAll('speed', speed);
 }
 
@@ -575,8 +584,11 @@ function resetAllGridSettings() {
   ui.currentTime.textContent = '00:00.00';
   ui.totalTime.textContent = '/ 00:00.00';
   ui.speedButtons.forEach((button) => {
-    button.classList.toggle('active', Number(button.dataset.gridSpeed) === DEFAULT_SPEED);
+    const active = Number(button.dataset.gridSpeed) === DEFAULT_SPEED;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-checked', String(active));
   });
+  if (ui.speedMenuValue) ui.speedMenuValue.textContent = `${DEFAULT_SPEED}×`;
 
   synchronizationPending = true;
   pendingTransportState = { playing: true, speed: DEFAULT_SPEED, progress: 0 };
@@ -604,8 +616,11 @@ ui.playAll.textContent = transportState.playing ? 'PAUSE ALL' : 'PLAY ALL';
 ui.playAll.setAttribute('aria-label', transportState.playing ? 'Pause all animations' : 'Play all animations');
 ui.playAll.classList.toggle('active', !transportState.playing);
 ui.speedButtons.forEach((button) => {
-  button.classList.toggle('active', Number(button.dataset.gridSpeed) === transportState.speed);
+  const active = Number(button.dataset.gridSpeed) === transportState.speed;
+  button.classList.toggle('active', active);
+  button.setAttribute('aria-checked', String(active));
 });
+if (ui.speedMenuValue) ui.speedMenuValue.textContent = `${transportState.speed}×`;
 
 ui.applyAvatarAll.addEventListener('click', () => {
   prepareSynchronizedReload();
@@ -649,7 +664,10 @@ ui.hideControlButtons.addEventListener('click', () => setControlButtonsHidden(!d
 ui.hideAllUi.addEventListener('click', () => setInterfaceHidden(!document.body.classList.contains('interface-hidden')));
 
 for (const button of ui.speedButtons) {
-  button.addEventListener('click', () => setAllSpeed(Number(button.dataset.gridSpeed)));
+  button.addEventListener('click', () => {
+    setAllSpeed(Number(button.dataset.gridSpeed));
+    ui.speedMenu?.removeAttribute('open');
+  });
 }
 
 ui.timeline.addEventListener('pointerdown', () => {

@@ -87,7 +87,7 @@ const CURVE_HISTORY_LENGTH = 108;
 const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
 const DEFAULT_SPEED = 3;
-const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10]);
+const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10, 50]);
 const DEFAULT_AVATAR_COLOR = 'lightGrey';
 const DEFAULT_AVATAR_GRADIENT_COLOR = '#d9dcde';
 const DEFAULT_SURFACE_MODE = 'smooth';
@@ -114,7 +114,7 @@ const DEFAULT_FLOW_FIELD_CONCENTRATION = 1;
 const SEQUENCE_TRANSITION_DURATION = 1.2;
 const MIX_UP_LOOP_BLEND_DURATION = 0.55;
 const INITIAL_POSE_TRIM_SECONDS = 0.35;
-const MAX_SEQUENCE_LENGTH = 24;
+const MAX_SEQUENCE_LENGTH = 59;
 const NO60_DRAWER_MIN_HEIGHT = 68;
 const NO60_DRAWER_DEFAULT_HEIGHT = 405;
 const NO60_DRAWER_TOP_GAP = 150;
@@ -538,6 +538,7 @@ const ui = {
   sequenceTrack: document.querySelector('#sequence-track'),
   sequenceStatus: document.querySelector('#sequence-status'),
   sequencePlay: document.querySelector('#sequence-play'),
+  sequenceAddAll: document.querySelector('#sequence-add-all'),
   sequenceRandomFive: document.querySelector('#sequence-random-five'),
   sequenceClear: document.querySelector('#sequence-clear'),
   mixUpToggle: document.querySelector('#mix-up-toggle'),
@@ -584,6 +585,8 @@ const ui = {
   timeline: document.querySelector('#timeline'),
   resetButton: document.querySelector('#reset-button'),
   speedButtons: [...document.querySelectorAll('[data-speed]')],
+  speedMenu: document.querySelector('#playback-speed-menu'),
+  speedMenuValue: document.querySelector('#playback-speed-value'),
   speedControlLabel: document.querySelector('#speed-control-label'),
   applySequenceSpeedAll: document.querySelector('#apply-sequence-speed-all'),
   avatarStyleToggle: document.querySelector('#avatar-style-toggle'),
@@ -1798,6 +1801,23 @@ function createRandomFiveSequence() {
     entry.playbackSpeed = state.speed;
     return entry;
   });
+  state.sequenceIndex = 0;
+  state.sequenceEnded = false;
+  state.sequencePendingStartIndex = 0;
+  state.sequencePendingPreviewIndex = null;
+  setSequenceTimelineOpen(true);
+  renderSequenceTimeline();
+}
+
+function createCompleteIndexedSequence() {
+  stopSequence();
+  state.sequence = [...INDEXED_MOVEMENTS]
+    .sort((first, second) => first.modelNumber - second.modelNumber)
+    .map((movement) => {
+      const entry = createSequenceEntry(movement.id, { speed: state.speed });
+      entry.playbackSpeed = state.speed;
+      return entry;
+    });
   state.sequenceIndex = 0;
   state.sequenceEnded = false;
   state.sequencePendingStartIndex = 0;
@@ -5628,12 +5648,15 @@ function setPlaying(playing) {
 
 function updatePlaybackSpeedButtons(speed) {
   ui.speedButtons.forEach((button) => {
-    button.classList.toggle('active', Number(button.dataset.speed) === speed);
+    const active = Number(button.dataset.speed) === speed;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-checked', String(active));
   });
+  if (ui.speedMenuValue) ui.speedMenuValue.textContent = `${speed}×`;
 }
 
 function setPlaybackSpeed(speed) {
-  if (!Number.isFinite(speed) || speed <= 0) return;
+  if (!PLAYBACK_SPEED_OPTIONS.includes(speed)) return;
   state.speed = speed;
   if ((state.sequenceActive || state.sequenceTimelineOpen) && state.sequence[state.sequenceIndex]) {
     state.sequence[state.sequenceIndex].playbackSpeed = speed;
@@ -6379,6 +6402,7 @@ ui.sequencePlay.addEventListener('click', () => {
     startSequence();
   }
 });
+ui.sequenceAddAll.addEventListener('click', createCompleteIndexedSequence);
 ui.sequenceRandomFive.addEventListener('click', createRandomFiveSequence);
 ui.sequenceClear.addEventListener('click', clearSequence);
 ui.mixUpToggle.addEventListener('click', () => setMixUpPanelOpen(!state.mixUpPanelOpen));
@@ -6523,7 +6547,10 @@ ui.timeline.addEventListener('input', () => {
 });
 
 for (const button of ui.speedButtons) {
-  button.addEventListener('click', () => setPlaybackSpeed(Number(button.dataset.speed)));
+  button.addEventListener('click', () => {
+    setPlaybackSpeed(Number(button.dataset.speed));
+    ui.speedMenu?.removeAttribute('open');
+  });
 }
 
 for (const button of ui.avatarColorButtons) {
@@ -6812,7 +6839,7 @@ renderer.setAnimationLoop(animate);
 
 const requestedEffect = PAGE_PARAMS.get('effect');
 if (PAGE_PARAMS.has('effect')) setExperimentMode(requestedEffect);
-setPlaybackSpeed(Number.isFinite(REQUESTED_SPEED) && REQUESTED_SPEED > 0 ? REQUESTED_SPEED : DEFAULT_SPEED);
+setPlaybackSpeed(PLAYBACK_SPEED_OPTIONS.includes(REQUESTED_SPEED) ? REQUESTED_SPEED : DEFAULT_SPEED);
 const requestedMovement = PAGE_PARAMS.get('movement');
 const requestedIndex = MOVEMENTS.findIndex((movement) => movement.id === requestedMovement);
 const defaultMovementIndex = MOVEMENTS.findIndex((movement) => movement.id === DEFAULT_MOVEMENT_ID);

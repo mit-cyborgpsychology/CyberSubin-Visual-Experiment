@@ -642,6 +642,12 @@
           </div>
           <div class="sequence-timeline-actions">
             <button id="sequence-play" type="button">PLAY SEQUENCE</button>
+            <button
+              id="sequence-add-all"
+              type="button"
+              title="Replace the timeline with all 59 movements in numerical order"
+              aria-label="Add all movements 1 through 59 in sequential order"
+            >ADD ALL 1–59</button>
             <button id="sequence-random-five" type="button" title="Replace the timeline with five random movements from 1–59">RANDOM 5</button>
             <button id="sequence-clear" type="button">CLEAR</button>
             <button id="sequence-timeline-close" class="menu-panel-close" type="button" aria-label="Hide sequence timeline">×</button>
@@ -741,16 +747,25 @@
 
         <div class="speed-control" aria-label="Playback speed">
           <span id="speed-control-label">SPEED</span>
-          <button type="button" data-speed="0.05">0.05×</button>
-          <button type="button" data-speed="0.1">0.1×</button>
-          <button type="button" data-speed="0.5">0.5×</button>
-          <button type="button" data-speed="1">1×</button>
-          <button type="button" data-speed="1.5">1.5×</button>
-          <button type="button" data-speed="2">2×</button>
-          <button type="button" data-speed="3" class="active">3×</button>
-          <button type="button" data-speed="4">4×</button>
-          <button type="button" data-speed="5">5×</button>
-          <button type="button" data-speed="10">10×</button>
+          <details id="playback-speed-menu" class="speed-menu">
+            <summary aria-label="Choose playback speed">
+              <strong id="playback-speed-value">3×</strong>
+              <span class="speed-menu__chevron" aria-hidden="true">⌃</span>
+            </summary>
+            <div class="speed-menu__options" role="radiogroup" aria-label="Playback speed options">
+              <button type="button" role="radio" aria-checked="false" data-speed="0.05">0.05×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="0.1">0.1×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="0.5">0.5×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="1">1×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="1.5">1.5×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="2">2×</button>
+              <button type="button" role="radio" aria-checked="true" data-speed="3" class="active">3×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="4">4×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="5">5×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="10">10×</button>
+              <button type="button" role="radio" aria-checked="false" data-speed="50">50×</button>
+            </div>
+          </details>
           <button id="apply-sequence-speed-all" class="speed-apply-all" type="button" disabled>APPLY ALL</button>
         </div>
 
