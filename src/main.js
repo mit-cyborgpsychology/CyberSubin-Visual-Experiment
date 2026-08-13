@@ -21,12 +21,24 @@ import {
   updateFlowField
 } from './flow-field.js';
 import { createSmoothMixClip, MIX_UP_PARTS } from './mix-up.js';
+import { prepareStandaloneRigClip } from './standalone-rig-clips.js';
 import {
   PHYSICS_CONSTANT_DEFINITIONS,
   createDefaultPhysicsConstants,
   getPhysicsConstantDefinition,
   sanitizePhysicsConstants
 } from './physics-constants.js';
+import {
+  ALL_TRACE_PARTS,
+  DEFAULT_TRACE_PARTS,
+  TRACE_EXTRA_DEFINITIONS,
+  TRACE_FOOT_EDGE_PAIRS,
+  TRACE_PART_PRESETS,
+  TRACE_PART_TRACKER_IDS,
+  resolveTraceEdgePair,
+  tracePartsIncludeTracker as tracePartsContainTracker,
+  tracePartsMatch
+} from './trace-controls.js';
 import {
   NO60_MODIFICATION_DEFINITIONS,
   applyNo60Modifications,
@@ -209,23 +221,15 @@ const TRACE_DURATION_SECONDS = {
   brief: 1.5,
   instant: 1
 };
-const TRACE_PART_TRACKER_IDS = Object.freeze({
-  body: Object.freeze(['body']),
-  hand: Object.freeze(['leftHand', 'rightHand']),
-  arm: Object.freeze(['leftArm', 'rightArm']),
-  leg: Object.freeze(['leftLeg', 'rightLeg']),
-  feet: Object.freeze(['leftFoot', 'rightFoot']),
-  head: Object.freeze(['head'])
-});
-const DEFAULT_TRACE_PARTS = Object.freeze(Object.keys(TRACE_PART_TRACKER_IDS));
 const LEGACY_TRACE_REGION_PARTS = Object.freeze({
   body: Object.freeze(['body']),
   hands: Object.freeze(['hand']),
   top: Object.freeze(['hand', 'arm', 'head']),
   legs: Object.freeze(['leg', 'feet']),
   limbs: Object.freeze(['hand', 'arm', 'leg', 'feet']),
-  full: DEFAULT_TRACE_PARTS
+  full: ALL_TRACE_PARTS
 });
+const LEGACY_DEFAULT_TRACE_PARTS = Object.freeze(['body', 'hand', 'arm', 'leg', 'feet', 'head']);
 const LEGACY_FLOOR_LIGHT_LEVELS = new Set(['off', 'low', 'medium', 'high']);
 const AVATAR_COLORS = {
   pearl: '#c7c9c5',
@@ -506,14 +510,14 @@ const TRACK_DEFINITIONS = [
     label: 'L HAND',
     bones: ['LeftHand'],
     anchor: 'LeftHand',
-    color: '#65f3ff'
+    color: '#159dff'
   },
   {
     id: 'rightHand',
     label: 'R HAND',
     bones: ['RightHand'],
     anchor: 'RightHand',
-    color: '#26bdd1'
+    color: '#1d8cff'
   },
   {
     id: 'leftArm',
@@ -548,6 +552,8 @@ const TRACK_DEFINITIONS = [
     label: 'L FOOT',
     bones: ['LeftFoot'],
     anchor: 'LeftFoot',
+    edgePairs: TRACE_FOOT_EDGE_PAIRS.left,
+    surfaceEdge: true,
     color: '#ffe0a1'
   },
   {
@@ -555,6 +561,8 @@ const TRACK_DEFINITIONS = [
     label: 'R FOOT',
     bones: ['RightFoot'],
     anchor: 'RightFoot',
+    edgePairs: TRACE_FOOT_EDGE_PAIRS.right,
+    surfaceEdge: true,
     color: '#ff9b67'
   },
   {
@@ -705,6 +713,7 @@ const ui = {
   flowFieldDescription: document.querySelector('#flow-field-description'),
   traceModeButtons: [...document.querySelectorAll('[data-trace-mode]')],
   tracePartButtons: [...document.querySelectorAll('[data-trace-part]')],
+  tracePresetButtons: [...document.querySelectorAll('[data-trace-preset]')],
   traceAllButton: document.querySelector('[data-trace-all]'),
   traceWidthButtons: [...document.querySelectorAll('[data-trace-width]')],
   traceVisibilityButtons: [...document.querySelectorAll('[data-trace-visible]')],
@@ -874,6 +883,7 @@ const state = {
   experimentFocusId: null,
   experimentFocusElapsed: 0,
   experimentTime: 0,
+  traceExtraTrackers: [],
   traceMode: 'permanent',
   traceParts: new Set(DEFAULT_TRACE_PARTS),
   traceWidth: 1.25,
@@ -1186,6 +1196,7 @@ function clearCurrentModel() {
   state.clip = null;
   state.bones = new Map();
   state.trackers = [];
+  state.traceExtraTrackers = [];
   state.experimentVisuals = null;
   state.no60VisualizationClones = new Map();
   state.experimentFocusId = null;
@@ -1210,15 +1221,9 @@ function resetMetricReadouts() {
   ui.torsoAngle.textContent = '—°';
 }
 
-function chooseClip(animations, modelNumber, source = null) {
+function chooseClip(animations, modelNumber, source = null, fileName = '') {
   if (source === 'glb-style-2') {
-    return animations.reduce((bestClip, candidate) => {
-      const sampleCount = candidate.tracks.reduce((sum, track) => sum + track.times.length, 0);
-      const bestSampleCount = bestClip
-        ? bestClip.tracks.reduce((sum, track) => sum + track.times.length, 0)
-        : -1;
-      return sampleCount > bestSampleCount ? candidate : bestClip;
-    }, null);
+    return prepareStandaloneRigClip(animations, fileName);
   }
   if (!Number.isInteger(modelNumber)) return animations.at(-1);
   const exactName = new RegExp(`^no0*${modelNumber}(?:_|$)`, 'i');
@@ -1601,7 +1606,12 @@ function loadSequenceClipData(entry) {
       movement.url,
       (gltf) => {
         try {
-          const sourceClip = chooseClip(gltf.animations, movement.modelNumber, movement.source);
+          const sourceClip = chooseClip(
+            gltf.animations,
+            movement.modelNumber,
+            movement.source,
+            movement.fileName
+          );
           if (!sourceClip) throw new Error(`Movement ${movement.id} has no animation clip.`);
           const clip = sourceClip.clone();
           clip.name = `sequence-source-${movement.id}`;
@@ -3885,108 +3895,178 @@ function indexBones(root) {
   return bones;
 }
 
+function getTraceTrackers() {
+  return [...state.trackers, ...state.traceExtraTrackers];
+}
+
 function tracePartsIncludeTracker(trackerId, parts = state.traceParts) {
-  return [...parts].some((part) => TRACE_PART_TRACKER_IDS[part]?.includes(trackerId));
+  return tracePartsContainTracker(trackerId, parts);
+}
+
+function findBoneWeightedSurfaceEdge(root, anchorBone) {
+  if (!root || !anchorBone) return null;
+  root.updateMatrixWorld(true);
+  const anchorWorld = anchorBone.getWorldPosition(new THREE.Vector3());
+  const candidateWorld = new THREE.Vector3();
+  const offsetWorld = new THREE.Vector3();
+  let edgeWorld = null;
+  let greatestDistance = 0;
+
+  root.traverse((object) => {
+    if (!object.isSkinnedMesh || !object.geometry?.attributes?.position || !object.skeleton) return;
+    const boneIndex = object.skeleton.bones.indexOf(anchorBone);
+    if (boneIndex < 0) return;
+    const skinIndex = object.geometry.attributes.skinIndex;
+    const skinWeight = object.geometry.attributes.skinWeight;
+    if (!skinIndex || !skinWeight) return;
+    object.skeleton.update();
+
+    for (let vertexIndex = 0; vertexIndex < skinIndex.count; vertexIndex += 1) {
+      let anchorWeight = 0;
+      if (skinIndex.getX(vertexIndex) === boneIndex) anchorWeight += skinWeight.getX(vertexIndex);
+      if (skinIndex.getY(vertexIndex) === boneIndex) anchorWeight += skinWeight.getY(vertexIndex);
+      if (skinIndex.getZ(vertexIndex) === boneIndex) anchorWeight += skinWeight.getZ(vertexIndex);
+      if (skinIndex.getW(vertexIndex) === boneIndex) anchorWeight += skinWeight.getW(vertexIndex);
+      if (anchorWeight < 0.25) continue;
+
+      object.getVertexPosition(vertexIndex, candidateWorld);
+      object.localToWorld(candidateWorld);
+      const distance = offsetWorld.subVectors(candidateWorld, anchorWorld).length();
+      if (distance <= greatestDistance) continue;
+      greatestDistance = distance;
+      edgeWorld = candidateWorld.clone();
+    }
+  });
+
+  return edgeWorld ? anchorBone.worldToLocal(edgeWorld) : null;
+}
+
+function createTracker(definition) {
+  const trackedBones = definition.bones.map((name) => state.bones.get(name)).filter(Boolean);
+  const edgePair = resolveTraceEdgePair(definition, (name) => state.bones.has(name));
+  const anchorBone = state.bones.get(edgePair?.anchor ?? definition.anchor) ?? trackedBones[0];
+  const edgeFromBone = edgePair ? state.bones.get(edgePair.from) : null;
+  const edgeLocalOffset = !edgePair && definition.surfaceEdge
+    ? findBoneWeightedSurfaceEdge(state.root, anchorBone)
+    : null;
+  const available = Boolean(anchorBone);
+  const color = new THREE.Color(definition.color);
+
+  const marker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.027, 14, 14),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false })
+  );
+  marker.renderOrder = 12;
+  marker.visible = state.bodyPointsVisible && available;
+  analysisObjects.add(marker);
+
+  const trailGeometry = new LineSegmentsGeometry();
+  const trailLinePositions = new Float32Array(TRAIL_INITIAL_RENDER_CAPACITY * 6);
+  const trailLineColors = new Float32Array(TRAIL_INITIAL_RENDER_CAPACITY * 6);
+  trailGeometry.setPositions(trailLinePositions);
+  trailGeometry.setColors(trailLineColors);
+  trailGeometry.instanceCount = 0;
+  const trail = new LineSegments2(
+    trailGeometry,
+    new LineMaterial({
+      color: 0xffffff,
+      linewidth: state.traceWidth,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+      alphaToCoverage: true
+    })
+  );
+  trail.frustumCulled = false;
+  trail.renderOrder = 8;
+  trail.visible = available && state.traceVisible && tracePartsIncludeTracker(definition.id, state.traceParts);
+  analysisObjects.add(trail);
+
+  const trailDotsGeometry = new THREE.BufferGeometry();
+  const trailPointPositions = new Float32Array(TRAIL_INITIAL_CAPACITY * 3);
+  const trailPointColors = new Float32Array(TRAIL_INITIAL_CAPACITY * 3);
+  trailDotsGeometry.setAttribute('position', new THREE.BufferAttribute(trailPointPositions, 3));
+  trailDotsGeometry.setAttribute('color', new THREE.BufferAttribute(trailPointColors, 3));
+  trailDotsGeometry.setDrawRange(0, 0);
+  const trailDots = new THREE.Points(
+    trailDotsGeometry,
+    new THREE.PointsMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      size: 0.024,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    })
+  );
+  trailDots.frustumCulled = false;
+  trailDots.renderOrder = 9;
+  trailDots.visible = available
+    && state.traceVisible
+    && state.traceDots
+    && tracePartsIncludeTracker(definition.id, state.traceParts);
+  analysisObjects.add(trailDots);
+
+  return {
+    definition,
+    available,
+    trackedBones,
+    anchorBone,
+    edgeFromBone,
+    edgeExtension: Number(edgePair?.extension) || 0,
+    edgeLocalOffset,
+    marker,
+    trail,
+    trailDots,
+    color,
+    trailPoints: [],
+    trailLinePositions,
+    trailLineColors,
+    trailLineCapacity: TRAIL_INITIAL_RENDER_CAPACITY,
+    trailPointPositions,
+    trailPointColors,
+    trailPointCapacity: TRAIL_INITIAL_CAPACITY,
+    hasTrailPoint: false,
+    history: Object.fromEntries(GRAPH_SERIES.map(({ key }) => [key, new Array(SIGNAL_WINDOW).fill(0)])),
+    position: new THREE.Vector3(),
+    anchorPosition: new THREE.Vector3(),
+    previousAnchorPosition: new THREE.Vector3(),
+    trailInterpolationPoint: new THREE.Vector3(),
+    motionPreviousPosition: new THREE.Vector3(),
+    velocity: new THREE.Vector3(),
+    speed: 0,
+    previousSpeed: 0,
+    acceleration: 0,
+    energyLevel: 0,
+    baselineEnergyLevel: 0,
+    energyActivityMemory: 0,
+    baselineEnergyActivityMemory: 0,
+    curveHistory: [],
+    coordinateOrigin: new THREE.Vector3(),
+    coordinate: new THREE.Vector3()
+  };
+}
+
+function getTrackerAnchorPosition(tracker, target) {
+  if (!tracker.anchorBone) return target.set(0, 0, 0);
+  if (tracker.edgeLocalOffset) {
+    target.copy(tracker.edgeLocalOffset);
+    return tracker.anchorBone.localToWorld(target);
+  }
+  tracker.anchorBone.getWorldPosition(target);
+  if (tracker.edgeFromBone && tracker.edgeExtension > 0) {
+    tracker.edgeFromBone.getWorldPosition(tempVectorB);
+    target.addScaledVector(tempVector.subVectors(target, tempVectorB), tracker.edgeExtension);
+  }
+  return target;
 }
 
 function createTrackers() {
-  state.trackers = TRACK_DEFINITIONS.map((definition) => {
-    const trackedBones = definition.bones.map((name) => state.bones.get(name)).filter(Boolean);
-    const anchorBone = state.bones.get(definition.anchor) ?? trackedBones[0];
-    const color = new THREE.Color(definition.color);
-
-    const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.027, 14, 14),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false })
-    );
-    marker.renderOrder = 12;
-    marker.visible = state.bodyPointsVisible;
-    analysisObjects.add(marker);
-
-    const trailGeometry = new LineSegmentsGeometry();
-    const trailLinePositions = new Float32Array(TRAIL_INITIAL_RENDER_CAPACITY * 6);
-    const trailLineColors = new Float32Array(TRAIL_INITIAL_RENDER_CAPACITY * 6);
-    trailGeometry.setPositions(trailLinePositions);
-    trailGeometry.setColors(trailLineColors);
-    trailGeometry.instanceCount = 0;
-    const trail = new LineSegments2(
-      trailGeometry,
-      new LineMaterial({
-        color: 0xffffff,
-        linewidth: state.traceWidth,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.96,
-        depthWrite: false,
-        alphaToCoverage: true
-      })
-    );
-    trail.frustumCulled = false;
-    trail.renderOrder = 8;
-    trail.visible = state.traceVisible && tracePartsIncludeTracker(definition.id);
-    analysisObjects.add(trail);
-
-    const trailDotsGeometry = new THREE.BufferGeometry();
-    const trailPointPositions = new Float32Array(TRAIL_INITIAL_CAPACITY * 3);
-    const trailPointColors = new Float32Array(TRAIL_INITIAL_CAPACITY * 3);
-    trailDotsGeometry.setAttribute('position', new THREE.BufferAttribute(trailPointPositions, 3));
-    trailDotsGeometry.setAttribute('color', new THREE.BufferAttribute(trailPointColors, 3));
-    trailDotsGeometry.setDrawRange(0, 0);
-    const trailDots = new THREE.Points(
-      trailDotsGeometry,
-      new THREE.PointsMaterial({
-        color: 0xffffff,
-        vertexColors: true,
-        size: 0.024,
-        sizeAttenuation: true,
-        transparent: true,
-        opacity: 0.72,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending
-      })
-    );
-    trailDots.frustumCulled = false;
-    trailDots.renderOrder = 9;
-    trailDots.visible = state.traceVisible
-      && state.traceDots
-      && tracePartsIncludeTracker(definition.id);
-    analysisObjects.add(trailDots);
-
-    return {
-      definition,
-      trackedBones,
-      anchorBone,
-      marker,
-      trail,
-      trailDots,
-      color,
-      trailPoints: [],
-      trailLinePositions,
-      trailLineColors,
-      trailLineCapacity: TRAIL_INITIAL_RENDER_CAPACITY,
-      trailPointPositions,
-      trailPointColors,
-      trailPointCapacity: TRAIL_INITIAL_CAPACITY,
-      hasTrailPoint: false,
-      history: Object.fromEntries(GRAPH_SERIES.map(({ key }) => [key, new Array(SIGNAL_WINDOW).fill(0)])),
-      position: new THREE.Vector3(),
-      anchorPosition: new THREE.Vector3(),
-      previousAnchorPosition: new THREE.Vector3(),
-      trailInterpolationPoint: new THREE.Vector3(),
-      motionPreviousPosition: new THREE.Vector3(),
-      velocity: new THREE.Vector3(),
-      speed: 0,
-      previousSpeed: 0,
-      acceleration: 0,
-      energyLevel: 0,
-      baselineEnergyLevel: 0,
-      energyActivityMemory: 0,
-      baselineEnergyActivityMemory: 0,
-      curveHistory: [],
-      coordinateOrigin: new THREE.Vector3(),
-      coordinate: new THREE.Vector3()
-    };
-  });
+  state.trackers = TRACK_DEFINITIONS.map(createTracker);
+  state.traceExtraTrackers = TRACE_EXTRA_DEFINITIONS.map(createTracker);
 }
 
 function createNo60OriginalTrackers() {
@@ -5794,7 +5874,7 @@ function resetTrackerSamples({ preserveTrails = false, preserveEnergy = false } 
   state.root?.updateMatrixWorld(true);
   for (const tracker of state.trackers) {
     getAveragePosition(tracker.trackedBones, tracker.position);
-    tracker.anchorBone?.getWorldPosition(tracker.anchorPosition);
+    getTrackerAnchorPosition(tracker, tracker.anchorPosition);
     tracker.marker.position.copy(tracker.anchorPosition);
     tracker.previousAnchorPosition.copy(tracker.anchorPosition);
     tracker.motionPreviousPosition.copy(tracker.anchorPosition);
@@ -5813,6 +5893,17 @@ function resetTrackerSamples({ preserveTrails = false, preserveEnergy = false } 
     tracker.coordinateOrigin.copy(tracker.anchorPosition);
     tracker.coordinate.set(0, 0, 0);
     for (const { key } of GRAPH_SERIES) tracker.history[key].fill(0);
+    if (!preserveTrails) clearTrailGeometry(tracker);
+    else tracker.hasTrailPoint = false;
+    appendTrailPoint(tracker, tracker.anchorPosition, false);
+  }
+  for (const tracker of state.traceExtraTrackers) {
+    if (!tracker.available) continue;
+    getAveragePosition(tracker.trackedBones, tracker.position);
+    getTrackerAnchorPosition(tracker, tracker.anchorPosition);
+    tracker.marker.position.copy(tracker.anchorPosition);
+    tracker.previousAnchorPosition.copy(tracker.anchorPosition);
+    tracker.motionPreviousPosition.copy(tracker.anchorPosition);
     if (!preserveTrails) clearTrailGeometry(tracker);
     else tracker.hasTrailPoint = false;
     appendTrailPoint(tracker, tracker.anchorPosition, false);
@@ -6088,7 +6179,12 @@ function prepareModel(gltf, movement) {
   const root = gltf.scene;
   styleModel(root);
 
-  const clip = chooseClip(gltf.animations, movement.modelNumber, movement.source);
+  const clip = chooseClip(
+    gltf.animations,
+    movement.modelNumber,
+    movement.source,
+    movement.fileName
+  );
   if (!clip) throw new Error(`Model ${movement.fileName} does not contain an animation clip.`);
   const clipStart = getTrimmedClipStart(clip);
 
@@ -6392,7 +6488,7 @@ function setAvatarPosition(nextX, nextY) {
 
   if (deltaX || deltaY) {
     tempVector.set(deltaX, deltaY, 0);
-    for (const tracker of state.trackers) {
+    for (const tracker of getTraceTrackers()) {
       tracker.trailPoints.forEach((entry) => entry.point.add(tempVector));
       tracker.position.add(tempVector);
       tracker.anchorPosition.add(tempVector);
@@ -6429,7 +6525,7 @@ function setTraceMode(mode, activeButton) {
   if (!(mode in TRACE_DURATION_SECONDS)) return;
   state.traceMode = mode;
   ui.traceModeButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
-  state.trackers.forEach(updateTrailGeometry);
+  getTraceTrackers().forEach(updateTrailGeometry);
 }
 
 function syncTracePartButtons() {
@@ -6438,15 +6534,20 @@ function syncTracePartButtons() {
     button.classList.toggle('active', selected);
     button.setAttribute('aria-pressed', String(selected));
   });
-  const allSelected = DEFAULT_TRACE_PARTS.every((part) => state.traceParts.has(part));
+  ui.tracePresetButtons.forEach((button) => {
+    const selected = tracePartsMatch(state.traceParts, TRACE_PART_PRESETS[button.dataset.tracePreset] ?? []);
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  const allSelected = tracePartsMatch(state.traceParts, ALL_TRACE_PARTS);
   ui.traceAllButton?.classList.toggle('active', allSelected);
   ui.traceAllButton?.setAttribute('aria-pressed', String(allSelected));
 }
 
 function applyTracePartSelection() {
   syncTracePartButtons();
-  state.trackers.forEach((tracker) => {
-    const selected = tracePartsIncludeTracker(tracker.definition.id);
+  getTraceTrackers().forEach((tracker) => {
+    const selected = tracker.available && tracePartsIncludeTracker(tracker.definition.id);
     if (selected && state.traceVisible) updateTrailGeometry(tracker);
     tracker.trail.visible = state.traceVisible && selected;
     tracker.trailDots.visible = state.traceVisible && state.traceDots && selected;
@@ -6455,8 +6556,16 @@ function applyTracePartSelection() {
 
 function setTraceParts(parts) {
   const validParts = [...new Set(parts)].filter((part) => part in TRACE_PART_TRACKER_IDS);
-  state.traceParts = new Set(validParts.length ? validParts : DEFAULT_TRACE_PARTS);
+  const nextParts = tracePartsMatch(validParts, LEGACY_DEFAULT_TRACE_PARTS)
+    ? DEFAULT_TRACE_PARTS
+    : validParts;
+  state.traceParts = new Set(nextParts.length ? nextParts : DEFAULT_TRACE_PARTS);
   applyTracePartSelection();
+}
+
+function setTracePreset(preset) {
+  const parts = TRACE_PART_PRESETS[preset];
+  if (parts) setTraceParts(parts);
 }
 
 function toggleTracePart(part) {
@@ -6481,8 +6590,8 @@ function setTraceVisibility(visible) {
   ui.lineDisplayToggle.setAttribute('aria-label', visible ? 'Turn trace display off' : 'Turn trace display on');
   ui.lineDisplayStatus.textContent = visible ? 'ON' : 'OFF';
   if (!visible) state.trailElapsed = 0;
-  state.trackers.forEach((tracker) => {
-    const selected = tracePartsIncludeTracker(tracker.definition.id);
+  getTraceTrackers().forEach((tracker) => {
+    const selected = tracker.available && tracePartsIncludeTracker(tracker.definition.id);
     if (visible) updateTrailGeometry(tracker);
     else tracker.hasTrailPoint = false;
     tracker.trail.visible = visible && selected;
@@ -6495,17 +6604,18 @@ function setBodyPointsVisibility(visible) {
   ui.bodyPointsToggle.setAttribute('aria-pressed', String(visible));
   ui.bodyPointsToggle.setAttribute('aria-label', visible ? 'Hide colored body points' : 'Show colored body points');
   ui.bodyPointsStatus.textContent = visible ? 'ON' : 'OFF';
-  state.trackers.forEach((tracker) => {
-    tracker.marker.visible = visible;
+  getTraceTrackers().forEach((tracker) => {
+    tracker.marker.visible = visible && tracker.available;
   });
 }
 
 function setTraceDots(showDots, activeButton) {
   state.traceDots = showDots;
   ui.traceDotButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
-  state.trackers.forEach((tracker) => {
+  getTraceTrackers().forEach((tracker) => {
     tracker.trailDots.visible = state.traceVisible
       && showDots
+      && tracker.available
       && tracePartsIncludeTracker(tracker.definition.id);
   });
 }
@@ -6513,14 +6623,14 @@ function setTraceDots(showDots, activeButton) {
 function setTraceSmoothing(smooth, activeButton) {
   state.traceSmoothing = smooth;
   ui.traceSmoothingButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
-  state.trackers.forEach(updateTrailGeometry);
+  getTraceTrackers().forEach(updateTrailGeometry);
 }
 
 function setTraceSampleRate(rate, activeButton) {
   state.traceSampleRate = rate;
   state.trailElapsed = 0;
   ui.traceSampleRateButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
-  state.trackers.forEach(updateTrailGeometry);
+  getTraceTrackers().forEach(updateTrailGeometry);
 }
 
 function setFloorLight(level, activeButton) {
@@ -6713,7 +6823,7 @@ function setAnalysisVisibility(visible) {
 function setTraceWidth(width, activeButton) {
   state.traceWidth = width;
   ui.traceWidthButtons.forEach((button) => button.classList.toggle('active', button === activeButton));
-  for (const tracker of state.trackers) {
+  for (const tracker of getTraceTrackers()) {
     tracker.trail.material.linewidth = width;
     tracker.trailDots.material.size = 0.018 + width * 0.004;
   }
@@ -6815,7 +6925,7 @@ function updateMotionSignals(delta, shouldSample, trailSampling = null) {
 
   for (const tracker of state.trackers) {
     getAveragePosition(tracker.trackedBones, tracker.position);
-    tracker.anchorBone?.getWorldPosition(tracker.anchorPosition);
+    getTrackerAnchorPosition(tracker, tracker.anchorPosition);
     tracker.marker.position.copy(tracker.anchorPosition);
 
     tracker.velocity.subVectors(tracker.anchorPosition, tracker.motionPreviousPosition).divideScalar(motionDelta);
@@ -6865,6 +6975,27 @@ function updateMotionSignals(delta, shouldSample, trailSampling = null) {
       const displayAverage = Math.abs(average) < 0.0005 ? 0 : average;
       row.querySelector('[data-axis-value="average"]').textContent = `${displayAverage >= 0 ? '+' : ''}${displayAverage.toFixed(3)}`;
     }
+  }
+
+  for (const tracker of state.traceExtraTrackers) {
+    if (!tracker.available) continue;
+    getAveragePosition(tracker.trackedBones, tracker.position);
+    getTrackerAnchorPosition(tracker, tracker.anchorPosition);
+    tracker.marker.position.copy(tracker.anchorPosition);
+    if (trailSampling?.count > 0) {
+      for (let sampleIndex = 0; sampleIndex < trailSampling.count; sampleIndex += 1) {
+        const sampleTime = trailSampling.interval * (sampleIndex + 1) - trailSampling.elapsedBeforeFrame;
+        const interpolation = THREE.MathUtils.clamp(sampleTime / trailSampling.frameDelta, 0, 1);
+        tracker.trailInterpolationPoint.lerpVectors(
+          tracker.previousAnchorPosition,
+          tracker.anchorPosition,
+          interpolation
+        );
+        appendTrailPoint(tracker, tracker.trailInterpolationPoint, true, false);
+      }
+      updateTrailGeometry(tracker);
+    }
+    tracker.previousAnchorPosition.copy(tracker.anchorPosition);
   }
 
   updateNo60OriginalMotionSignals(motionDelta);
@@ -7355,7 +7486,11 @@ for (const button of ui.tracePartButtons) {
   button.addEventListener('click', () => toggleTracePart(button.dataset.tracePart));
 }
 
-ui.traceAllButton.addEventListener('click', () => setTraceParts(DEFAULT_TRACE_PARTS));
+for (const button of ui.tracePresetButtons) {
+  button.addEventListener('click', () => setTracePreset(button.dataset.tracePreset));
+}
+
+ui.traceAllButton.addEventListener('click', () => setTraceParts(ALL_TRACE_PARTS));
 
 for (const button of ui.traceWidthButtons) {
   button.addEventListener('click', () => setTraceWidth(Number(button.dataset.traceWidth), button));

@@ -241,12 +241,21 @@
                     <div class="trace-option-group option-grid--two trace-body-parts" aria-label="Trace body-part visibility">
                       <span>BODY PARTS · SHOW / HIDE</span>
                       <button type="button" data-trace-part="body" class="active" aria-pressed="true">BODY</button>
-                      <button type="button" data-trace-part="hand" class="active" aria-pressed="true">HAND</button>
+                      <button type="button" data-trace-part="bottom" class="active" aria-pressed="true">BOTTOM</button>
+                      <button type="button" data-trace-part="indexFinger" class="active" aria-pressed="true">INDEX FINGERS</button>
+                      <button type="button" data-trace-part="otherFingers" aria-pressed="false">OTHER FINGERS</button>
+                      <button type="button" data-trace-part="hand" aria-pressed="false">HANDS</button>
                       <button type="button" data-trace-part="arm" class="active" aria-pressed="true">ARM</button>
                       <button type="button" data-trace-part="leg" class="active" aria-pressed="true">LEG</button>
                       <button type="button" data-trace-part="feet" class="active" aria-pressed="true">FEET</button>
                       <button type="button" data-trace-part="head" class="active" aria-pressed="true">HEAD</button>
-                      <button type="button" data-trace-all class="active" aria-pressed="true">FULL BODY</button>
+                    </div>
+                    <div class="trace-option-group option-grid--two trace-presets" aria-label="Trace focus presets">
+                      <span>FOCUS MODE</span>
+                      <button type="button" data-trace-preset="default" class="active" aria-pressed="true">DEFAULT</button>
+                      <button type="button" data-trace-preset="allFingers" aria-pressed="false">ALL FINGERS</button>
+                      <button type="button" data-trace-preset="fingersHandsArms" aria-pressed="false">FINGERS + HANDS + ARMS</button>
+                      <button type="button" data-trace-all aria-pressed="false">FULL BODY</button>
                     </div>
                     <div class="trace-option-group trace-width-control option-row--compact option-row--two" aria-label="Trace line width">
                       <span>WIDTH</span>

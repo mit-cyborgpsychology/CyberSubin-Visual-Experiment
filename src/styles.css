@@ -980,8 +980,30 @@ body.controls-hidden .visualization-menu {
   border-left: 0;
 }
 
-.trace-body-parts [data-trace-all] {
+.trace-control .trace-body-parts,
+.trace-control .trace-presets {
+  width: 100%;
+  border-top: 1px solid var(--line);
+  border-left: 0;
+}
+
+.trace-control .trace-body-parts {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.trace-control .trace-presets {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.trace-control .trace-body-parts > span,
+.trace-control .trace-presets > span {
   grid-column: 1 / -1;
+}
+
+.trace-control .trace-presets [data-trace-preset="fingersHandsArms"] {
+  min-height: 48px;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .avatar-style-control .avatar-opacity-control {
