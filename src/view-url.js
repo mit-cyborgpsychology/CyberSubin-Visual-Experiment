@@ -4,6 +4,8 @@ const STRING_PARAMETERS = [
   'avatarGradientMiddle',
   'avatarGradientBottom',
   'surfaceMode',
+  'avatarEffectMode',
+  'avatarEffectSettings',
   'lightingPreset',
   'lightingColor',
   'lightingCustomColor',

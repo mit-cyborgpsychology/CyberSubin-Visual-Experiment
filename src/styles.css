@@ -2129,6 +2129,140 @@ body.embedded-view .axis-widget {
   }
 }
 
+/* Generative avatar effects live inside Avatar Style and follow its flat,
+   high-contrast control hierarchy. */
+.avatar-style-control > .avatar-effect-mode,
+.avatar-style-control > .avatar-effect-settings,
+.avatar-style-control > .avatar-effect-description {
+  flex: 0 0 100%;
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.avatar-effect-settings[hidden] {
+  display: none;
+}
+
+.avatar-effect-settings [data-sculpture-dots-only][hidden] {
+  display: none;
+}
+
+.avatar-effect-settings {
+  display: block;
+  background: #050607;
+}
+
+.avatar-effect-heading {
+  display: grid;
+  gap: 4px;
+  min-height: 54px;
+  align-content: center;
+  padding: 9px 12px;
+  background: rgba(101, 243, 255, 0.11);
+}
+
+.avatar-effect-heading strong {
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 0.13em;
+}
+
+.avatar-effect-heading small {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 8px;
+  line-height: 1.45;
+  letter-spacing: 0.08em;
+}
+
+.avatar-effect-settings .flow-slider-group,
+.avatar-effect-settings .flow-color-group,
+.avatar-effect-settings .trace-option-group {
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 0;
+}
+
+.avatar-effect-settings .flow-slider-group {
+  min-height: 52px;
+  padding: 8px 12px 10px;
+  background: #050607;
+}
+
+.avatar-effect-settings .flow-slider-group > span {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.avatar-effect-settings .flow-slider-group output {
+  color: var(--accent);
+}
+
+.avatar-effect-settings .flow-color-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0;
+}
+
+.avatar-effect-settings .flow-color-group > span {
+  grid-column: 1 / -1;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: rgba(101, 243, 255, 0.5);
+  color: #fff;
+  font-weight: 750;
+}
+
+.avatar-effect-settings .flow-color-group label {
+  min-width: 0;
+  min-height: 46px;
+  justify-content: space-between;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0 8px;
+  font-size: 8px;
+}
+
+.avatar-effect-settings .flow-color-group label:first-of-type {
+  border-left: 0;
+}
+
+.avatar-effect-action {
+  padding: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.avatar-effect-action button {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid rgba(255, 94, 87, 0.65);
+  background: rgba(255, 94, 87, 0.12);
+  color: #ff716b;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+.avatar-effect-action button:hover,
+.avatar-effect-action button:focus-visible {
+  background: #ff5e57;
+  color: #050607;
+}
+
+.avatar-effect-description {
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 12px;
+  background: #080a0b;
+  color: #81898e;
+  font-size: 9px;
+  line-height: 1.55;
+  letter-spacing: 0.08em;
+}
+
 @media (max-width: 860px) {
   .control-section-panel,
   .visualization-menu-panel {
