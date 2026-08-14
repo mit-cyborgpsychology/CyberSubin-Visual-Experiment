@@ -103,6 +103,34 @@
                         <input id="avatar-gradient-bottom" data-avatar-gradient-stop="bottom" type="color" value="#d9dcde" aria-label="Avatar gradient bottom color">
                       </label>
                     </div>
+                    <div class="trace-option-group option-grid--two" aria-label="Avatar lighting">
+                      <span>LIGHTING</span>
+                      <button type="button" data-lighting-preset="studio">STUDIO</button>
+                      <button type="button" data-lighting-preset="bright">BRIGHT</button>
+                      <button type="button" data-lighting-preset="flat">FLAT LIGHT</button>
+                      <button type="button" data-lighting-preset="under">UNDER LIGHT</button>
+                      <button type="button" data-lighting-preset="softFront">SOFT FRONT</button>
+                      <button type="button" data-lighting-preset="side">SIDE LIGHT</button>
+                      <button type="button" data-lighting-preset="highSide">HIGH SIDE</button>
+                      <button type="button" data-lighting-preset="cross">CROSS LIGHT</button>
+                      <button type="button" data-lighting-preset="lowKey">LOW KEY</button>
+                      <button type="button" data-lighting-preset="top" class="active">TOP LIGHT</button>
+                      <button type="button" data-lighting-preset="rim">RIM</button>
+                      <button type="button" data-lighting-preset="softSilhouette">SOFT SIL</button>
+                      <button type="button" data-lighting-preset="backlight">BACKLIGHT</button>
+                      <button type="button" data-lighting-preset="silhouette">SILHOUETTE</button>
+                    </div>
+                    <div class="flow-color-group avatar-light-color-group" aria-label="Custom light color control">
+                      <span>LIGHT COLOR</span>
+                      <label for="lighting-custom-color">
+                        PICK ANY COLOR
+                        <input id="lighting-custom-color" type="color" value="#b7c9d3" aria-label="Custom light color">
+                      </label>
+                    </div>
+                    <label class="flow-slider-group avatar-lighting-intensity" for="lighting-intensity">
+                      <span>LIGHTING INTENSITY <output id="lighting-intensity-value" for="lighting-intensity">100%</output></span>
+                      <input id="lighting-intensity" type="range" min="0" max="3" step="0.05" value="1" aria-label="Lighting intensity">
+                    </label>
                     <div class="trace-option-group option-row--compact option-row--two" aria-label="Avatar surface">
                       <span>SURFACE</span>
                       <button type="button" data-avatar-surface="smooth" class="active">SMOOTH</button>
@@ -131,11 +159,6 @@
                         <button type="button" data-avatar-hair-coverage="open" class="active">OPEN FIBERS</button>
                         <button type="button" data-avatar-hair-coverage="full">FULL COAT</button>
                       </div>
-                      <div class="trace-option-group option-grid--two" aria-label="Hair surface lighting">
-                        <span>HAIR LIGHTING</span>
-                        <button type="button" data-avatar-hair-lighting="scene" class="active">SCENE LIT</button>
-                        <button type="button" data-avatar-hair-lighting="flat">FLAT / UNLIT</button>
-                      </div>
                       <div class="trace-option-group option-grid--two" aria-label="Hair strand shape">
                         <span>STRAND SHAPE</span>
                         <button type="button" data-avatar-hair-shape="line" class="active">LINE</button>
@@ -160,6 +183,14 @@
                         <span>SHAPE DEPTH / Z <output data-avatar-effect-value="hair.shapeDepth">1.00×</output></span>
                         <input id="avatar-hair-shape-depth" data-avatar-effect-slider="hair.shapeDepth" type="range" min="0.25" max="3" step="0.05" value="1" aria-label="Hair geometry depth multiplier for three-dimensional shapes">
                       </label>
+                      <label class="flow-slider-group" for="avatar-hair-length">
+                        <span>HAIR LENGTH <output data-avatar-effect-value="hair.length">0.34 M</output></span>
+                        <input id="avatar-hair-length" data-avatar-effect-slider="hair.length" type="range" min="0.08" max="1.2" step="0.01" value="0.34">
+                      </label>
+                      <label class="flow-slider-group" for="avatar-hair-thickness">
+                        <span>SHAPE THICKNESS <output data-avatar-effect-value="hair.thickness">2.2×</output></span>
+                        <input id="avatar-hair-thickness" data-avatar-effect-slider="hair.thickness" type="range" min="0.5" max="7" step="0.1" value="2.2">
+                      </label>
                       <div class="trace-option-group option-grid--two" aria-label="Combined hair growth pattern">
                         <span>GROWTH PATTERN</span>
                         <button type="button" data-avatar-hair-growth-pattern="uniform">UNIFORM</button>
@@ -179,14 +210,6 @@
                       <label class="flow-slider-group" for="avatar-hair-outward-bias">
                         <span>DYNAMIC FLOW ↔ RADIAL OUTWARD <output data-avatar-effect-value="hair.outwardBias">0% OUTWARD</output></span>
                         <input id="avatar-hair-outward-bias" data-avatar-effect-slider="hair.outwardBias" type="range" min="0" max="1" step="0.01" value="0" aria-label="Blend between dynamic flow and radial outward hair direction">
-                      </label>
-                      <label class="flow-slider-group" for="avatar-hair-length">
-                        <span>LENGTH <output data-avatar-effect-value="hair.length">0.34 M</output></span>
-                        <input id="avatar-hair-length" data-avatar-effect-slider="hair.length" type="range" min="0.08" max="1.2" step="0.01" value="0.34">
-                      </label>
-                      <label class="flow-slider-group" for="avatar-hair-thickness">
-                        <span>THICKNESS <output data-avatar-effect-value="hair.thickness">2.2×</output></span>
-                        <input id="avatar-hair-thickness" data-avatar-effect-slider="hair.thickness" type="range" min="0.5" max="7" step="0.1" value="2.2">
                       </label>
                       <label class="flow-slider-group" for="avatar-hair-density">
                         <span>DENSITY <output data-avatar-effect-value="hair.density">420</output></span>
@@ -208,6 +231,11 @@
                         <span>CURL / WAVINESS <output data-avatar-effect-value="hair.curl">0.15×</output></span>
                         <input id="avatar-hair-curl" data-avatar-effect-slider="hair.curl" type="range" min="0" max="2" step="0.05" value="0.15">
                       </label>
+                      <div class="trace-option-group option-grid--two" aria-label="Hair surface lighting">
+                        <span>HAIR LIGHTING</span>
+                        <button type="button" data-avatar-hair-lighting="scene" class="active">SCENE LIT</button>
+                        <button type="button" data-avatar-hair-lighting="flat">FLAT / UNLIT</button>
+                      </div>
                       <div class="trace-option-group option-grid--two avatar-effect-patterns" aria-label="Hair color pattern">
                         <span>COLOR PATTERN</span>
                         <button type="button" data-avatar-effect-pattern="hair.gradient" class="active">POSITION GRADIENT</button>
@@ -309,34 +337,6 @@
                     <p id="avatar-effect-description" class="avatar-effect-description" aria-live="polite">
                       OFF · SELECT A GENERATIVE AVATAR EFFECT
                     </p>
-                    <div class="trace-option-group option-grid--two" aria-label="Avatar lighting">
-                      <span>LIGHTING</span>
-                      <button type="button" data-lighting-preset="studio">STUDIO</button>
-                      <button type="button" data-lighting-preset="bright">BRIGHT</button>
-                      <button type="button" data-lighting-preset="flat">FLAT LIGHT</button>
-                      <button type="button" data-lighting-preset="under">UNDER LIGHT</button>
-                      <button type="button" data-lighting-preset="softFront">SOFT FRONT</button>
-                      <button type="button" data-lighting-preset="side">SIDE LIGHT</button>
-                      <button type="button" data-lighting-preset="highSide">HIGH SIDE</button>
-                      <button type="button" data-lighting-preset="cross">CROSS LIGHT</button>
-                      <button type="button" data-lighting-preset="lowKey">LOW KEY</button>
-                      <button type="button" data-lighting-preset="top" class="active">TOP LIGHT</button>
-                      <button type="button" data-lighting-preset="rim">RIM</button>
-                      <button type="button" data-lighting-preset="softSilhouette">SOFT SIL</button>
-                      <button type="button" data-lighting-preset="backlight">BACKLIGHT</button>
-                      <button type="button" data-lighting-preset="silhouette">SILHOUETTE</button>
-                    </div>
-                    <div class="flow-color-group avatar-light-color-group" aria-label="Custom light color control">
-                      <span>LIGHT COLOR</span>
-                      <label for="lighting-custom-color">
-                        PICK ANY COLOR
-                        <input id="lighting-custom-color" type="color" value="#b7c9d3" aria-label="Custom light color">
-                      </label>
-                    </div>
-                    <label class="flow-slider-group avatar-lighting-intensity" for="lighting-intensity">
-                      <span>LIGHTING INTENSITY <output id="lighting-intensity-value" for="lighting-intensity">100%</output></span>
-                      <input id="lighting-intensity" type="range" min="0" max="3" step="0.05" value="1" aria-label="Lighting intensity">
-                    </label>
                   </div>
                 </div>
               </section>
