@@ -1,5 +1,5 @@
 
-Cyber Subin 2.0 Lab — NO.60 Modification Panel
+Cyber Subin 2.0 Lab 
 
 General Changes
 
