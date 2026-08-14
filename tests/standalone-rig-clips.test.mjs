@@ -69,3 +69,55 @@ assert.equal(
 );
 
 console.log('Vietnam standalone playback duration verified.');
+
+function scalableClip(name) {
+  const positionValues = new Float32Array([
+    0, 0.9, 0.06,
+    100, -9.1, 50.06
+  ]);
+  const rotationValues = new Float32Array([
+    0, 0, 0, 1,
+    0, 0.5, 0, 0.866
+  ]);
+  return {
+    name,
+    duration: 10,
+    tracks: [
+      { name: 'Hips.position', values: positionValues },
+      { name: 'Hips.quaternion', values: rotationValues }
+    ],
+    clone() {
+      return {
+        ...this,
+        tracks: this.tracks.map((track) => ({
+          ...track,
+          values: new Float32Array(track.values)
+        }))
+      };
+    }
+  };
+}
+
+for (const fileName of ['Bruneifull.glb', 'Myanmarfull.glb']) {
+  const source = scalableClip('Raw Capture');
+  const playback = prepareStandaloneRigClip([source], fileName);
+  assert.notEqual(playback, source, `${fileName} should use a safe cloned clip`);
+  assert.match(playback.name, /Playback$/);
+  assert.deepEqual(
+    Array.from(playback.tracks[0].values).map((value) => Number(value.toFixed(4))),
+    [0, 0.9, 0.06, 1, 0.8, 0.56],
+    `${fileName} should retain its first pose and scale later displacement from centimeters`
+  );
+  assert.deepEqual(
+    Array.from(playback.tracks[1].values),
+    Array.from(source.tracks[1].values),
+    `${fileName} should not alter joint rotation`
+  );
+  assert.deepEqual(
+    Array.from(source.tracks[0].values).map((value) => Number(value.toFixed(4))),
+    [0, 0.9, 0.06, 100, -9.1, 50.06],
+    `${fileName} should not mutate the source clip`
+  );
+}
+
+console.log('Brunei and Myanmar standalone translation units verified.');
