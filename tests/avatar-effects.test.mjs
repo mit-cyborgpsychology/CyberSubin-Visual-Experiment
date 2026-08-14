@@ -5,6 +5,11 @@ import {
   AVATAR_EFFECT_MODES,
   HAIR_COVERAGE_OPTIONS,
   HAIR_DIRECTION_OPTIONS,
+  HAIR_DISTRIBUTION_OPTIONS,
+  HAIR_GROWTH_PATTERN_OPTIONS,
+  HAIR_GROWTH_PATTERN_SETTINGS,
+  HAIR_LENGTH_MODE_OPTIONS,
+  HAIR_LIGHTING_OPTIONS,
   HAIR_SHAPE_OPTIONS,
   SCULPTURE_FORM_OPTIONS,
   SCULPTURE_RETENTION_OPTIONS,
@@ -12,8 +17,11 @@ import {
   createAvatarEffects,
   updateAvatarSurfaceGeometry,
   createDefaultAvatarEffectSettings,
+  isHairScalpReference,
   resolveAvatarEffectColor,
   resolveHairActiveCount,
+  resolveHairGrowthPattern,
+  resolveHairLengthScale,
   resolveHairPhysicsProfile,
   resolveInteriorParticleDepth,
   resolveInteriorParticlePosition,
@@ -26,8 +34,47 @@ import { readViewStateFromParams, writeViewStateToParams } from '../src/view-url
 test('avatar effect defaults expose all three generative modes', () => {
   assert.deepEqual(AVATAR_EFFECT_MODES, ['off', 'hair', 'interior', 'sculpture']);
   assert.deepEqual(HAIR_COVERAGE_OPTIONS, ['open', 'full']);
+  assert.deepEqual(HAIR_LIGHTING_OPTIONS, ['scene', 'flat']);
   assert.deepEqual(HAIR_DIRECTION_OPTIONS, ['flow', 'outward']);
-  assert.deepEqual(HAIR_SHAPE_OPTIONS, ['line', 'ribbon', 'rod', 'tuft']);
+  assert.deepEqual(
+    HAIR_SHAPE_OPTIONS,
+    ['line', 'ribbon', 'rod', 'tuft', 'sphere', 'triangle', 'circle', 'oval', 'spike']
+  );
+  assert.deepEqual(
+    HAIR_DISTRIBUTION_OPTIONS,
+    ['current', 'uniform', 'clusters', 'bands', 'asymmetric']
+  );
+  assert.deepEqual(
+    HAIR_LENGTH_MODE_OPTIONS,
+    ['uniform', 'extremities', 'head', 'topGradient', 'random', 'alternating']
+  );
+  assert.deepEqual(
+    HAIR_GROWTH_PATTERN_OPTIONS,
+    [
+      'uniform',
+      'organic',
+      'headOnly',
+      'headHands',
+      'wingHands',
+      'bodyRhythm',
+      'topCascade',
+      'shoulderHalo',
+      'legBloom',
+      'torsoPulse',
+      'leftSweep',
+      'rightSweep',
+      'diagonalFlow'
+    ]
+  );
+  assert.deepEqual(
+    HAIR_GROWTH_PATTERN_SETTINGS.headHands,
+    {
+      distribution: 'uniform',
+      lengthMode: 'uniform',
+      region: 'headHands',
+      symmetrical: true
+    }
+  );
   assert.deepEqual(SCULPTURE_FORM_OPTIONS, ['dots', 'surface']);
   assert.deepEqual(
     SCULPTURE_RETENTION_OPTIONS,
@@ -36,7 +83,14 @@ test('avatar effect defaults expose all three generative modes', () => {
   const defaults = createDefaultAvatarEffectSettings();
   assert.equal(defaults.hair.length, 0.34);
   assert.equal(defaults.hair.coverage, 'open');
+  assert.equal(defaults.hair.lighting, 'scene');
   assert.equal(defaults.hair.shape, 'line');
+  assert.equal(defaults.hair.shapeWidth, 1);
+  assert.equal(defaults.hair.shapeLength, 1);
+  assert.equal(defaults.hair.shapeDepth, 1);
+  assert.equal(defaults.hair.growthPattern, 'organic');
+  assert.equal(defaults.hair.distribution, 'current');
+  assert.equal(defaults.hair.lengthMode, 'uniform');
   assert.equal(defaults.hair.outwardBias, 0);
   assert.equal(defaults.hair.flexibility, 0.68);
   assert.equal('stiffness' in defaults.hair, false);
@@ -50,12 +104,18 @@ test('avatar effect settings sanitize ranges, patterns, retention, and colors', 
   const sanitized = sanitizeAvatarEffectSettings({
     hair: {
       length: 99,
+      shapeWidth: 99,
+      shapeLength: -4,
+      shapeDepth: 2.4,
       density: -10,
       flexibility: 99,
       motionResponse: -2,
       curl: 7,
       coverage: 'full',
+      lighting: 'flat',
       shape: 'ribbon',
+      distribution: 'bands',
+      lengthMode: 'head',
       outwardBias: 0.72,
       pattern: 'invalid',
       colors: ['#ABCDEF', 'bad', '#010203']
@@ -64,10 +124,17 @@ test('avatar effect settings sanitize ranges, patterns, retention, and colors', 
     sculpture: { interval: 0, retention: 'invalid', opacity: 4, form: 'surface' }
   });
   assert.equal(sanitized.hair.length, 1.2);
+  assert.equal(sanitized.hair.shapeWidth, 3);
+  assert.equal(sanitized.hair.shapeLength, 0.25);
+  assert.equal(sanitized.hair.shapeDepth, 2.4);
   assert.equal(sanitized.hair.density, 60);
   assert.equal(sanitized.hair.pattern, 'gradient');
   assert.equal(sanitized.hair.coverage, 'full');
+  assert.equal(sanitized.hair.lighting, 'flat');
   assert.equal(sanitized.hair.shape, 'ribbon');
+  assert.equal(sanitized.hair.growthPattern, 'custom');
+  assert.equal(sanitized.hair.distribution, 'bands');
+  assert.equal(sanitized.hair.lengthMode, 'head');
   assert.equal(sanitized.hair.outwardBias, 0.72);
   assert.equal(sanitized.hair.flexibility, 1);
   assert.equal(sanitized.hair.motionResponse, 0);
@@ -87,6 +154,109 @@ test('avatar effect settings sanitize ranges, patterns, retention, and colors', 
   assert.ok(
     Math.abs(sanitizeAvatarEffectSettings({ hair: { stiffness: 0.9 } }).hair.flexibility - 0.1) < 1e-9
   );
+  const preset = sanitizeAvatarEffectSettings({
+    hair: { growthPattern: 'headCrown', distribution: 'current', lengthMode: 'uniform' }
+  });
+  assert.equal(preset.hair.growthPattern, 'headCrown');
+  assert.equal(preset.hair.distribution, 'uniform');
+  assert.equal(preset.hair.lengthMode, 'head');
+});
+
+test('combined hair growth presets resolve distribution and length together', () => {
+  assert.deepEqual(
+    resolveHairGrowthPattern('uniform'),
+    {
+      key: 'uniform',
+      distribution: 'uniform',
+      lengthMode: 'uniform',
+      region: 'all',
+      symmetrical: true
+    }
+  );
+  assert.deepEqual(
+    resolveHairGrowthPattern('headHands'),
+    {
+      key: 'headHands',
+      distribution: 'uniform',
+      lengthMode: 'uniform',
+      region: 'headHands',
+      symmetrical: true
+    }
+  );
+  assert.deepEqual(
+    resolveHairGrowthPattern('unknown'),
+    {
+      key: 'organic',
+      distribution: 'current',
+      lengthMode: 'uniform',
+      region: 'all',
+      symmetrical: false
+    }
+  );
+  assert.deepEqual(
+    resolveHairGrowthPattern('clusteredTufts'),
+    {
+      key: 'clusteredTufts',
+      distribution: 'clusters',
+      lengthMode: 'random',
+      region: 'all',
+      symmetrical: false
+    }
+  );
+});
+
+test('Head Only uses a scalp cap and excludes neck-weighted vertices', () => {
+  assert.equal(isHairScalpReference(0.93, ['mixamorigHead']), true);
+  assert.equal(isHairScalpReference(0.93, ['mixamorigNeck']), false);
+  assert.equal(isHairScalpReference(0.95, ['mixamorigHead', 'mixamorigNeck']), false);
+  assert.equal(isHairScalpReference(0.87, ['mixamorigHead']), false);
+  assert.equal(isHairScalpReference(0.93, []), true);
+  assert.equal(isHairScalpReference(0.9, []), false);
+});
+
+test('symmetrical growth presets maintain balanced left and right anchor counts', () => {
+  const root = new THREE.Group();
+  const sourceGeometry = new THREE.BoxGeometry(2, 4, 1);
+  const sourceMaterial = new THREE.MeshStandardMaterial();
+  root.add(new THREE.Mesh(sourceGeometry, sourceMaterial));
+  const effects = createAvatarEffects({
+    maxHairStrands: 40,
+    hairSegments: 1,
+    maxInteriorParticles: 1
+  });
+  effects.setRoot(root);
+  const settings = createDefaultAvatarEffectSettings();
+  settings.hair.growthPattern = 'uniform';
+  settings.hair.distribution = 'uniform';
+  settings.hair.lengthMode = 'uniform';
+  effects.setSettings(settings);
+  const debug = effects.getDebugState();
+  assert.equal(debug.hairGrowthPattern, 'uniform');
+  assert.equal(debug.hairReferenceCount, 40);
+  assert.equal(debug.hairLeftReferences, debug.hairRightReferences);
+  effects.dispose();
+  sourceGeometry.dispose();
+  sourceMaterial.dispose();
+});
+
+test('hair length profiles create deterministic body-aware variation', () => {
+  assert.equal(resolveHairLengthScale('uniform'), 1);
+  assert.equal(resolveHairLengthScale('head', { isHead: false }), 0);
+  assert.equal(resolveHairLengthScale('head', { isHead: true }), 1.65);
+  assert.ok(
+    resolveHairLengthScale('extremities', { normalizedHeight: 1, normalizedRadius: 1 })
+      > resolveHairLengthScale('extremities', { normalizedHeight: 0.5, normalizedRadius: 0.1 })
+  );
+  assert.ok(
+    resolveHairLengthScale('topGradient', { normalizedHeight: 0.95 })
+      > resolveHairLengthScale('topGradient', { normalizedHeight: 0.05 })
+  );
+  const randomA = resolveHairLengthScale('random', { seed: 41 });
+  const randomB = resolveHairLengthScale('random', { seed: 41 });
+  assert.equal(randomA, randomB);
+  assert.ok(randomA >= 0.18 && randomA <= 1.9);
+  const wave = resolveHairLengthScale('alternating', { seed: 8, normalizedHeight: 0.5 });
+  assert.ok(wave >= 0.2 && wave <= 1.75);
 });
 
 test('hair flexibility remains independent from radial outward direction', () => {
@@ -95,12 +265,19 @@ test('hair flexibility remains independent from radial outward direction', () =>
   assert.ok(soft.velocityRetention > firm.velocityRetention);
   assert.ok(soft.springBlend < firm.springBlend);
   assert.ok(soft.chainStiffnessBlend < firm.chainStiffnessBlend);
-  assert.ok(soft.rootDirectionBlend > soft.chainStiffnessBlend);
-  assert.ok(soft.rootDirectionBlend < 0.02);
-  assert.ok(soft.chainStiffnessBlend < 0.001);
+  assert.equal(soft.rootDirectionBlend, 0);
+  assert.equal(soft.chainStiffnessBlend, 0);
   assert.ok(soft.kinematicCarry < firm.kinematicCarry);
   assert.ok(soft.inertialResponse > firm.inertialResponse);
   assert.equal(soft.gravity, firm.gravity);
+});
+
+test('highly flexible hair can bend at its base independently of outward direction', () => {
+  const almostFullyFlexible = resolveHairPhysicsProfile(0.92, 2.5, 1 / 60, 2);
+  assert.ok(almostFullyFlexible.rootDirectionBlend < 0.002);
+  assert.ok(almostFullyFlexible.chainStiffnessBlend < 0.001);
+  assert.ok(almostFullyFlexible.springBlend < 0.001);
+  assert.ok(almostFullyFlexible.inertialResponse > 1);
 });
 
 test('hair weight adds sag and drag without making flexible strands stiff or springy', () => {
@@ -381,6 +558,108 @@ test('full hair coat raises strand coverage without exceeding available referenc
   assert.equal(resolveHairActiveCount(2400, 900, 'full'), 900);
 });
 
+test('circle hair uses a filled 2D disc with its perimeter attached to the body root', () => {
+  const sourceGeometry = new THREE.BufferGeometry();
+  sourceGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+  const sourceMaterial = new THREE.MeshBasicMaterial();
+  const source = new THREE.Mesh(sourceGeometry, sourceMaterial);
+  const root = new THREE.Group();
+  root.add(source);
+  const effects = createAvatarEffects({ maxHairStrands: 1, hairSegments: 1 });
+  const circle = effects.group.getObjectByName('CyberSubinHairCircle');
+  assert.ok(circle?.isInstancedMesh);
+  assert.equal(circle.geometry.type, 'CircleGeometry');
+  assert.ok(circle.geometry.index.count > 0);
+  const circlePositions = circle.geometry.getAttribute('position');
+  for (let index = 0; index < circlePositions.count; index += 1) {
+    assert.ok(Math.abs(circlePositions.getZ(index)) < 1e-9);
+  }
+
+  effects.setRoot(root);
+  const settings = createDefaultAvatarEffectSettings();
+  settings.hair.shape = 'circle';
+  settings.hair.length = 0.4;
+  settings.hair.shapeWidth = 1.8;
+  settings.hair.shapeLength = 0.6;
+  settings.hair.density = 60;
+  effects.setSettings(settings);
+  effects.setMode('hair');
+  effects.update(1 / 60);
+  assert.equal(circle.count, 1);
+  const instanceMatrix = new THREE.Matrix4();
+  circle.getMatrixAt(0, instanceMatrix);
+  const attachedEdge = new THREE.Vector3(0, -0.5, 0).applyMatrix4(instanceMatrix);
+  assert.ok(attachedEdge.distanceTo(new THREE.Vector3(0, 0, 0)) < 1e-6);
+  const instanceScale = new THREE.Vector3();
+  instanceMatrix.decompose(new THREE.Vector3(), new THREE.Quaternion(), instanceScale);
+  assert.ok(Math.abs(instanceScale.x / instanceScale.y - 3) < 1e-6);
+  effects.dispose();
+  sourceGeometry.dispose();
+  sourceMaterial.dispose();
+});
+
+test('geometric hair surfaces use light-reactive shadow materials', () => {
+  const effects = createAvatarEffects({ maxHairStrands: 1, hairSegments: 1 });
+  for (const shape of HAIR_SHAPE_OPTIONS.filter((entry) => entry !== 'line')) {
+    const name = `CyberSubinHair${shape[0].toUpperCase()}${shape.slice(1)}`;
+    const mesh = effects.group.getObjectByName(name);
+    assert.ok(mesh?.material?.isMeshStandardMaterial, `${shape} should use MeshStandardMaterial`);
+    assert.equal(mesh.castShadow, true);
+    assert.equal(mesh.receiveShadow, true);
+  }
+  effects.dispose();
+});
+
+test('three-dimensional hair shapes expose independent width, length, and depth', () => {
+  const sourceGeometry = new THREE.BufferGeometry();
+  sourceGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+  const sourceMaterial = new THREE.MeshBasicMaterial();
+  const source = new THREE.Mesh(sourceGeometry, sourceMaterial);
+  const root = new THREE.Group();
+  root.add(source);
+  const effects = createAvatarEffects({ maxHairStrands: 1, hairSegments: 1 });
+  const oval = effects.group.getObjectByName('CyberSubinHairOval');
+  effects.setRoot(root);
+  const settings = createDefaultAvatarEffectSettings();
+  settings.hair.shape = 'oval';
+  settings.hair.length = 0.4;
+  settings.hair.shapeWidth = 1.5;
+  settings.hair.shapeLength = 0.75;
+  settings.hair.shapeDepth = 2.25;
+  settings.hair.density = 60;
+  effects.setSettings(settings);
+  effects.setMode('hair');
+  effects.update(1 / 60);
+  assert.equal(oval.count, 1);
+  const instanceMatrix = new THREE.Matrix4();
+  oval.getMatrixAt(0, instanceMatrix);
+  const attachedEdge = new THREE.Vector3(0, -0.5, 0).applyMatrix4(instanceMatrix);
+  assert.ok(attachedEdge.distanceTo(new THREE.Vector3(0, 0, 0)) < 1e-6);
+  const instanceScale = new THREE.Vector3();
+  instanceMatrix.decompose(new THREE.Vector3(), new THREE.Quaternion(), instanceScale);
+  assert.ok(Math.abs(instanceScale.x / instanceScale.z - (1.5 / (0.72 * 2.25))) < 1e-6);
+  effects.dispose();
+  sourceGeometry.dispose();
+  sourceMaterial.dispose();
+});
+
+test('flat hair lighting swaps every geometric surface to unlit shadow-free material', () => {
+  const effects = createAvatarEffects({ maxHairStrands: 1, hairSegments: 1 });
+  const settings = createDefaultAvatarEffectSettings();
+  settings.hair.lighting = 'flat';
+  effects.setSettings(settings);
+  for (const shape of HAIR_SHAPE_OPTIONS.filter((entry) => entry !== 'line')) {
+    const name = `CyberSubinHair${shape[0].toUpperCase()}${shape.slice(1)}`;
+    const mesh = effects.group.getObjectByName(name);
+    assert.ok(mesh?.material?.isMeshBasicMaterial, `${shape} should use MeshBasicMaterial`);
+    assert.equal(mesh.material.toneMapped, false);
+    assert.equal(mesh.castShadow, false);
+    assert.equal(mesh.receiveShadow, false);
+  }
+  assert.equal(effects.getDebugState().hairLighting, 'flat');
+  effects.dispose();
+});
+
 test('body surface snapshots bake the posed mesh into world-space geometry', () => {
   const sourceGeometry = new THREE.BoxGeometry(1, 2, 3);
   const sourceMaterial = new THREE.MeshStandardMaterial();
@@ -446,7 +725,14 @@ test('avatar effect state round-trips through shareable URL parameters', () => {
   const settings = createDefaultAvatarEffectSettings();
   settings.hair.weight = 1.65;
   settings.hair.coverage = 'full';
+  settings.hair.lighting = 'flat';
   settings.hair.shape = 'rod';
+  settings.hair.shapeWidth = 1.35;
+  settings.hair.shapeLength = 0.8;
+  settings.hair.shapeDepth = 2.1;
+  settings.hair.growthPattern = 'headHands';
+  settings.hair.distribution = 'uniform';
+  settings.hair.lengthMode = 'uniform';
   settings.hair.outwardBias = 0.65;
   settings.hair.flexibility = 0.92;
   settings.sculpture.form = 'surface';
@@ -460,7 +746,14 @@ test('avatar effect state round-trips through shareable URL parameters', () => {
   assert.equal(view.avatarEffectMode, 'hair');
   assert.equal(JSON.parse(view.avatarEffectSettings).hair.weight, 1.65);
   assert.equal(JSON.parse(view.avatarEffectSettings).hair.coverage, 'full');
+  assert.equal(JSON.parse(view.avatarEffectSettings).hair.lighting, 'flat');
   assert.equal(JSON.parse(view.avatarEffectSettings).hair.shape, 'rod');
+  assert.equal(JSON.parse(view.avatarEffectSettings).hair.shapeWidth, 1.35);
+  assert.equal(JSON.parse(view.avatarEffectSettings).hair.shapeLength, 0.8);
+  assert.equal(JSON.parse(view.avatarEffectSettings).hair.shapeDepth, 2.1);
+  assert.equal(JSON.parse(view.avatarEffectSettings).hair.growthPattern, 'headHands');
+  assert.equal(JSON.parse(view.avatarEffectSettings).hair.distribution, 'uniform');
+  assert.equal(JSON.parse(view.avatarEffectSettings).hair.lengthMode, 'uniform');
   assert.equal(JSON.parse(view.avatarEffectSettings).hair.outwardBias, 0.65);
   assert.equal(JSON.parse(view.avatarEffectSettings).hair.flexibility, 0.92);
   assert.equal(JSON.parse(view.avatarEffectSettings).sculpture.form, 'surface');

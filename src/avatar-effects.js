@@ -3,7 +3,68 @@ import * as THREE from 'three';
 export const AVATAR_EFFECT_MODES = Object.freeze(['off', 'hair', 'interior', 'sculpture']);
 export const AVATAR_EFFECT_PATTERNS = Object.freeze(['gradient', 'animal', 'polkadot', 'random']);
 export const HAIR_COVERAGE_OPTIONS = Object.freeze(['open', 'full']);
-export const HAIR_SHAPE_OPTIONS = Object.freeze(['line', 'ribbon', 'rod', 'tuft']);
+export const HAIR_LIGHTING_OPTIONS = Object.freeze(['scene', 'flat']);
+export const HAIR_SHAPE_OPTIONS = Object.freeze([
+  'line',
+  'ribbon',
+  'rod',
+  'tuft',
+  'sphere',
+  'triangle',
+  'circle',
+  'oval',
+  'spike'
+]);
+export const HAIR_DISTRIBUTION_OPTIONS = Object.freeze([
+  'current',
+  'uniform',
+  'clusters',
+  'bands',
+  'asymmetric'
+]);
+export const HAIR_LENGTH_MODE_OPTIONS = Object.freeze([
+  'uniform',
+  'extremities',
+  'head',
+  'topGradient',
+  'random',
+  'alternating'
+]);
+export const HAIR_GROWTH_PATTERN_OPTIONS = Object.freeze([
+  'uniform',
+  'organic',
+  'headOnly',
+  'headHands',
+  'wingHands',
+  'bodyRhythm',
+  'topCascade',
+  'shoulderHalo',
+  'legBloom',
+  'torsoPulse',
+  'leftSweep',
+  'rightSweep',
+  'diagonalFlow'
+]);
+export const HAIR_GROWTH_PATTERN_SETTINGS = Object.freeze({
+  uniform: Object.freeze({ distribution: 'uniform', lengthMode: 'uniform', region: 'all', symmetrical: true }),
+  organic: Object.freeze({ distribution: 'current', lengthMode: 'uniform', region: 'all', symmetrical: false }),
+  headOnly: Object.freeze({ distribution: 'uniform', lengthMode: 'uniform', region: 'head', symmetrical: true }),
+  headHands: Object.freeze({ distribution: 'uniform', lengthMode: 'uniform', region: 'headHands', symmetrical: true }),
+  wingHands: Object.freeze({ distribution: 'uniform', lengthMode: 'uniform', region: 'hands', symmetrical: true }),
+  bodyRhythm: Object.freeze({ distribution: 'bands', lengthMode: 'alternating', region: 'all', symmetrical: true }),
+  topCascade: Object.freeze({ distribution: 'uniform', lengthMode: 'topGradient', region: 'all', symmetrical: true }),
+  shoulderHalo: Object.freeze({ distribution: 'uniform', lengthMode: 'alternating', region: 'upper', symmetrical: true }),
+  legBloom: Object.freeze({ distribution: 'uniform', lengthMode: 'extremities', region: 'legs', symmetrical: true }),
+  torsoPulse: Object.freeze({ distribution: 'bands', lengthMode: 'alternating', region: 'torso', symmetrical: true }),
+  leftSweep: Object.freeze({ distribution: 'uniform', lengthMode: 'topGradient', region: 'left', symmetrical: false }),
+  rightSweep: Object.freeze({ distribution: 'uniform', lengthMode: 'topGradient', region: 'right', symmetrical: false }),
+  diagonalFlow: Object.freeze({ distribution: 'uniform', lengthMode: 'random', region: 'diagonal', symmetrical: false }),
+  // Legacy aliases remain readable in previously shared URLs.
+  extremityBloom: Object.freeze({ distribution: 'uniform', lengthMode: 'extremities', region: 'all', symmetrical: true }),
+  headCrown: Object.freeze({ distribution: 'uniform', lengthMode: 'head', region: 'all', symmetrical: true }),
+  clusteredTufts: Object.freeze({ distribution: 'clusters', lengthMode: 'random', region: 'all', symmetrical: false }),
+  asymmetricBurst: Object.freeze({ distribution: 'asymmetric', lengthMode: 'random', region: 'all', symmetrical: false })
+});
 // Kept for backward-compatible share links; the UI uses outwardBias continuously.
 export const HAIR_DIRECTION_OPTIONS = Object.freeze(['flow', 'outward']);
 export const SCULPTURE_RETENTION_OPTIONS = Object.freeze([
@@ -28,10 +89,17 @@ const SCULPTURE_RETENTION_SECONDS = Object.freeze({
 export const DEFAULT_AVATAR_EFFECT_SETTINGS = Object.freeze({
   hair: Object.freeze({
     coverage: 'open',
+    lighting: 'scene',
     shape: 'line',
+    growthPattern: 'organic',
+    distribution: 'current',
+    lengthMode: 'uniform',
     outwardBias: 0,
     length: 0.34,
     thickness: 2.2,
+    shapeWidth: 1,
+    shapeLength: 1,
+    shapeDepth: 1,
     density: 420,
     weight: 1,
     flexibility: 0.68,
@@ -64,6 +132,9 @@ const OPTION_RANGES = Object.freeze({
   hair: Object.freeze({
     length: [0.08, 1.2],
     thickness: [0.5, 7],
+    shapeWidth: [0.25, 3],
+    shapeLength: [0.25, 3],
+    shapeDepth: [0.25, 3],
     density: [60, 4800],
     weight: [0, 2.5],
     flexibility: [0, 1],
@@ -100,6 +171,7 @@ const tempHairCenter = new THREE.Vector3();
 const tempHairTarget = new THREE.Vector3();
 const tempHairObject = new THREE.Object3D();
 const HAIR_LOCAL_AXIS = new THREE.Vector3(0, 1, 0);
+const WHOLE_STRAND_HAIR_SHAPES = new Set(['triangle', 'circle', 'oval', 'spike']);
 
 function clampNumber(value, fallback, range) {
   const numeric = Number(value);
@@ -114,6 +186,20 @@ function normalizeColor(value, fallback) {
 
 function sanitizeColors(colors, defaults) {
   return defaults.map((fallback, index) => normalizeColor(colors?.[index], fallback));
+}
+
+export function isHairScalpReference(normalizedHeight, boneNames = []) {
+  const height = THREE.MathUtils.clamp(Number(normalizedHeight) || 0, 0, 1);
+  const names = boneNames.map((name) => String(name ?? '').toLowerCase());
+  const hasHeadInfluence = names.some((name) => /head|skull/.test(name));
+  const hasNeckInfluence = names.some((name) => /neck/.test(name));
+  // Explicit neck weighting always wins. This prevents the Head Only preset
+  // from growing a collar around the neck, including blended neck/head seams.
+  if (hasNeckInfluence) return false;
+  if (hasHeadInfluence) return height >= 0.88;
+  // Rigs without usable skin-weight names fall back to the top ten percent of
+  // the avatar, which approximates a scalp cap rather than the whole head.
+  return height >= 0.92;
 }
 
 export function createDefaultAvatarEffectSettings() {
@@ -157,9 +243,30 @@ export function sanitizeAvatarEffectSettings(settings) {
   resolved.hair.coverage = HAIR_COVERAGE_OPTIONS.includes(settings?.hair?.coverage)
     ? settings.hair.coverage
     : defaults.hair.coverage;
+  resolved.hair.lighting = HAIR_LIGHTING_OPTIONS.includes(settings?.hair?.lighting)
+    ? settings.hair.lighting
+    : defaults.hair.lighting;
   resolved.hair.shape = HAIR_SHAPE_OPTIONS.includes(settings?.hair?.shape)
     ? settings.hair.shape
     : defaults.hair.shape;
+  resolved.hair.distribution = HAIR_DISTRIBUTION_OPTIONS.includes(settings?.hair?.distribution)
+    ? settings.hair.distribution
+    : defaults.hair.distribution;
+  resolved.hair.lengthMode = HAIR_LENGTH_MODE_OPTIONS.includes(settings?.hair?.lengthMode)
+    ? settings.hair.lengthMode
+    : defaults.hair.lengthMode;
+  if (HAIR_GROWTH_PATTERN_SETTINGS[settings?.hair?.growthPattern]) {
+    resolved.hair.growthPattern = settings.hair.growthPattern;
+    const preset = HAIR_GROWTH_PATTERN_SETTINGS[resolved.hair.growthPattern];
+    resolved.hair.distribution = preset.distribution;
+    resolved.hair.lengthMode = preset.lengthMode;
+  } else {
+    const inferred = Object.entries(HAIR_GROWTH_PATTERN_SETTINGS).find(([, preset]) => (
+      preset.distribution === resolved.hair.distribution
+      && preset.lengthMode === resolved.hair.lengthMode
+    ));
+    resolved.hair.growthPattern = inferred?.[0] ?? 'custom';
+  }
   if (settings?.hair?.outwardBias == null && settings?.hair?.direction === 'outward') {
     resolved.hair.outwardBias = 1;
   }
@@ -182,6 +289,36 @@ export function resolveHairActiveCount(density, availableCount, coverage = 'open
   return Math.min(available, Math.max(requested, fullCoatMinimum));
 }
 
+export function resolveHairLengthScale(
+  mode,
+  {
+    normalizedHeight = 0.5,
+    normalizedRadius = 0.5,
+    seed = 0,
+    isHead = false
+  } = {}
+) {
+  const height = THREE.MathUtils.clamp(Number(normalizedHeight) || 0, 0, 1);
+  const radius = THREE.MathUtils.clamp(Number(normalizedRadius) || 0, 0, 1);
+  if (mode === 'extremities') {
+    const verticalReach = Math.abs(height - 0.5) * 2;
+    return THREE.MathUtils.lerp(0.32, 1.85, Math.max(radius, verticalReach));
+  }
+  if (mode === 'head') return isHead ? 1.65 : 0;
+  if (mode === 'topGradient') return THREE.MathUtils.lerp(0.22, 1.75, height ** 1.35);
+  if (mode === 'random') return THREE.MathUtils.lerp(0.18, 1.9, hash01(seed * 4.31 + 0.71));
+  if (mode === 'alternating') {
+    const wave = 0.5 + 0.5 * Math.sin(seed * 2.17 + height * Math.PI * 8);
+    return THREE.MathUtils.lerp(0.2, 1.75, wave ** 1.4);
+  }
+  return 1;
+}
+
+export function resolveHairGrowthPattern(pattern) {
+  const key = HAIR_GROWTH_PATTERN_SETTINGS[pattern] ? pattern : 'organic';
+  return { key, ...HAIR_GROWTH_PATTERN_SETTINGS[key] };
+}
+
 export function resolveHairPhysicsProfile(flexibility, weight, delta, motionResponse = 1) {
   const softness = THREE.MathUtils.clamp(Number(flexibility) || 0, 0, 1);
   const resolvedWeight = THREE.MathUtils.clamp(Number(weight) || 0, 0, 2.5);
@@ -193,9 +330,13 @@ export function resolveHairPhysicsProfile(flexibility, weight, delta, motionResp
     0.52,
     0.97
   );
-  const perFrameSpring = THREE.MathUtils.lerp(0.09, 0.0015, softness);
-  const perFrameChainStiffness = THREE.MathUtils.lerp(0.1, 0.00035, softness);
-  const perFrameRootDirection = THREE.MathUtils.lerp(0.32, 0.018, softness);
+  // Material structure drops non-linearly near the flexible end. This is
+  // especially important at the skin: outward direction is a rest pose, not a
+  // rigid hinge, so 90-100% flexible hair can bend directly from its base.
+  const structure = (1 - softness) ** 2;
+  const perFrameSpring = 0.00025 + 0.08975 * structure;
+  const perFrameChainStiffness = 0.095 * structure;
+  const perFrameRootDirection = 0.3 * structure;
   const requestedMotionResponse = THREE.MathUtils.clamp(Number(motionResponse) || 0, 0, 2);
   const responseAmount = requestedMotionResponse / 2;
   return {
@@ -206,8 +347,8 @@ export function resolveHairPhysicsProfile(flexibility, weight, delta, motionResp
     gravity: 4.2 * resolvedWeight,
     springBlend: 1 - Math.pow(1 - perFrameSpring, frameScale),
     chainStiffnessBlend: 1 - Math.pow(1 - perFrameChainStiffness, frameScale),
-    // Direction is only a light root bias for soft hair. The remaining chain
-    // is free to trail behind the body instead of repeatedly straightening.
+    // Direction is a root rest bias only. At full flexibility it reaches zero,
+    // even when the strand was initialized 100% radially outward.
     rootDirectionBlend: 1 - Math.pow(1 - perFrameRootDirection, frameScale),
     windResponse: THREE.MathUtils.lerp(0.3, 1.15, softness)
       * THREE.MathUtils.lerp(1, 0.68, weightAmount),
@@ -284,12 +425,20 @@ function createBoneInfluences(source, vertexIndex) {
   return influences;
 }
 
-function createSampleReferences(meshes, count, seedOffset = 0, includeBoneInfluences = false) {
+function createSampleReferences(
+  meshes,
+  count,
+  seedOffset = 0,
+  includeBoneInfluences = false,
+  sampling = 'current'
+) {
   const totalVertices = meshes.reduce((sum, entry) => sum + entry.count, 0);
   if (!totalVertices || !meshes.length) return [];
   const references = [];
   for (let sampleIndex = 0; sampleIndex < count; sampleIndex += 1) {
-    let globalIndex = Math.floor(hash01(sampleIndex * 2.73 + seedOffset) * totalVertices);
+    let globalIndex = sampling === 'uniform'
+      ? Math.min(totalVertices - 1, Math.floor(((sampleIndex + 0.5) / count) * totalVertices))
+      : Math.floor(hash01(sampleIndex * 2.73 + seedOffset) * totalVertices);
     let selected = meshes[meshes.length - 1];
     for (const entry of meshes) {
       if (globalIndex < entry.count) {
@@ -308,6 +457,203 @@ function createSampleReferences(meshes, count, seedOffset = 0, includeBoneInflue
 function readWorldVertex(reference, target) {
   reference.source.getVertexPosition(reference.vertexIndex, target);
   return target.applyMatrix4(reference.source.matrixWorld);
+}
+
+function annotateHairReferences(root, references) {
+  if (!root || !references.length) return references;
+  root.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(root);
+  const size = bounds.getSize(new THREE.Vector3());
+  const center = bounds.getCenter(new THREE.Vector3());
+  const halfX = Math.max(size.x * 0.5, 0.001);
+  const halfY = Math.max(size.y * 0.5, 0.001);
+  const halfZ = Math.max(size.z * 0.5, 0.001);
+  for (const reference of references) {
+    reference.source.updateWorldMatrix(true, false);
+    readWorldVertex(reference, tempVertex);
+    reference.normalizedX = THREE.MathUtils.clamp((tempVertex.x - bounds.min.x) / Math.max(size.x, 0.001), 0, 1);
+    reference.normalizedHeight = THREE.MathUtils.clamp((tempVertex.y - bounds.min.y) / Math.max(size.y, 0.001), 0, 1);
+    reference.normalizedZ = THREE.MathUtils.clamp((tempVertex.z - bounds.min.z) / Math.max(size.z, 0.001), 0, 1);
+    reference.normalizedRadius = THREE.MathUtils.clamp(Math.sqrt(
+      ((tempVertex.x - center.x) / halfX) ** 2
+      + ((tempVertex.y - center.y) / halfY) ** 2
+      + ((tempVertex.z - center.z) / halfZ) ** 2
+    ) / Math.sqrt(3), 0, 1);
+    const boneNames = (reference.boneInfluences ?? [])
+      .filter(({ weight }) => weight > 0.04)
+      .map(({ bone }) => String(bone.name ?? '').toLowerCase());
+    const hasBone = (pattern) => boneNames.some((name) => pattern.test(name));
+    reference.isHead = isHairScalpReference(reference.normalizedHeight, boneNames);
+    reference.isHand = hasBone(/hand|wrist|finger|thumb|index|middle|ring|pinky/);
+    reference.isArm = hasBone(/arm|shoulder|clavicle|forearm/);
+    reference.isLeg = hasBone(/leg|thigh|calf|shin|foot|toe/);
+    reference.isTorso = hasBone(/spine|chest|hip|pelvis|torso|root/);
+    const isLeft = hasBone(/left|(^|[_:.])l($|[_:.])|lhand|larm|lleg|lfoot/);
+    const isRight = hasBone(/right|(^|[_:.])r($|[_:.])|rhand|rarm|rleg|rfoot/);
+    reference.side = isLeft && !isRight ? 'left' : isRight && !isLeft ? 'right' : 'center';
+    if (!boneNames.length) {
+      reference.isHand = reference.normalizedRadius > 0.7
+        && reference.normalizedHeight > 0.38
+        && reference.normalizedHeight < 0.88;
+      reference.isLeg = reference.normalizedHeight < 0.46;
+      reference.isTorso = !reference.isHead && !reference.isHand && !reference.isLeg;
+    }
+  }
+  return references;
+}
+
+function hairReferenceMatchesRegion(reference, region) {
+  if (region === 'head') return reference.isHead;
+  if (region === 'hands') return reference.isHand;
+  if (region === 'headHands') return reference.isHead || reference.isHand;
+  if (region === 'upper') {
+    return reference.isHead || reference.isHand || reference.isArm || reference.normalizedHeight > 0.58;
+  }
+  if (region === 'legs') return reference.isLeg || reference.normalizedHeight < 0.46;
+  if (region === 'torso') {
+    return reference.isTorso || (
+      !reference.isHead
+      && !reference.isHand
+      && !reference.isArm
+      && !reference.isLeg
+      && reference.normalizedHeight > 0.28
+      && reference.normalizedHeight < 0.82
+    );
+  }
+  if (region === 'left') return reference.side === 'left' || reference.normalizedX < 0.46;
+  if (region === 'right') return reference.side === 'right' || reference.normalizedX > 0.54;
+  if (region === 'diagonal') {
+    const leftSide = reference.side === 'left' || reference.normalizedX < 0.5;
+    return leftSide === (reference.normalizedHeight > 0.52);
+  }
+  return true;
+}
+
+function getHairReferenceSide(reference) {
+  if (reference.side === 'left' || reference.side === 'right') return reference.side;
+  if (reference.normalizedX < 0.485) return 'left';
+  if (reference.normalizedX > 0.515) return 'right';
+  return 'center';
+}
+
+function orderSymmetricHairReferences(references) {
+  const left = references.filter((reference) => getHairReferenceSide(reference) === 'left');
+  const right = references.filter((reference) => getHairReferenceSide(reference) === 'right');
+  const center = references.filter((reference) => getHairReferenceSide(reference) === 'center');
+  const compareMirrorCoordinates = (a, b) => (
+    a.normalizedHeight - b.normalizedHeight
+    || a.normalizedZ - b.normalizedZ
+    || Math.abs(a.normalizedX - 0.5) - Math.abs(b.normalizedX - 0.5)
+  );
+  left.sort(compareMirrorCoordinates);
+  right.sort(compareMirrorCoordinates);
+  const pairCount = Math.min(left.length, right.length);
+  const pairs = [];
+  for (let index = 0; index < pairCount; index += 1) {
+    pairs.push({
+      left: left[index],
+      right: right[index],
+      order: hash01((left[index].seed + right[index].seed) * 2.37)
+    });
+  }
+  pairs.sort((a, b) => a.order - b.order);
+  const ordered = [];
+  for (const pair of pairs) ordered.push(pair.left, pair.right);
+  center.sort((a, b) => hash01(a.seed * 3.29) - hash01(b.seed * 3.29));
+  ordered.push(...center);
+  return ordered;
+}
+
+function expandHairReferences(references, count) {
+  if (!references.length || count <= 0) return [];
+  const expanded = [];
+  for (let index = 0; index < count; index += 1) {
+    const source = references[index % references.length];
+    const cycle = Math.floor(index / references.length);
+    expanded.push(cycle === 0 ? source : { ...source, seed: source.seed + cycle * 7919 });
+  }
+  return expanded;
+}
+
+function orderUniformHairReferences(references) {
+  const cells = new Map();
+  for (const reference of references) {
+    const cellKey = `${Math.min(4, Math.floor(reference.normalizedX * 5))}:${Math.min(7, Math.floor(reference.normalizedHeight * 8))}:${Math.min(4, Math.floor(reference.normalizedZ * 5))}`;
+    if (!cells.has(cellKey)) cells.set(cellKey, []);
+    cells.get(cellKey).push(reference);
+  }
+  const queues = [...cells.values()];
+  for (const queue of queues) queue.sort((a, b) => hash01(a.seed * 1.91) - hash01(b.seed * 1.91));
+  queues.sort((a, b) => hash01(a[0].seed * 3.17) - hash01(b[0].seed * 3.17));
+  const ordered = [];
+  let remaining = true;
+  while (remaining) {
+    remaining = false;
+    for (const queue of queues) {
+      const reference = queue.shift();
+      if (!reference) continue;
+      ordered.push(reference);
+      remaining = true;
+    }
+  }
+  return ordered;
+}
+
+function createHairReferences(root, meshes, count, distribution, growthPattern) {
+  if (!root || !meshes.length || count <= 0) return [];
+  const growth = HAIR_GROWTH_PATTERN_SETTINGS[growthPattern] ?? {
+    region: 'all',
+    symmetrical: false
+  };
+  if (distribution === 'current' && growth.region === 'all' && !growth.symmetrical) {
+    return annotateHairReferences(root, createSampleReferences(meshes, count, 11, true));
+  }
+  const allCandidates = annotateHairReferences(
+    root,
+    createSampleReferences(meshes, Math.max(count, count * 3), 11, true, 'uniform')
+  );
+  const regionCandidates = allCandidates.filter((reference) => (
+    hairReferenceMatchesRegion(reference, growth.region)
+  ));
+  let candidates = regionCandidates.length ? regionCandidates : allCandidates;
+  const clusterCenters = [
+    [0.22, 0.74, 0.46],
+    [0.78, 0.54, 0.54],
+    [0.38, 0.18, 0.62],
+    [0.62, 0.9, 0.38]
+  ];
+  const score = (reference) => {
+    const jitter = hash01(reference.seed * 4.73) * 0.12;
+    if (distribution === 'clusters') {
+      let nearest = Infinity;
+      for (const [x, y, z] of clusterCenters) {
+        nearest = Math.min(nearest, Math.sqrt(
+          (reference.normalizedX - x) ** 2
+          + (reference.normalizedHeight - y) ** 2
+          + (reference.normalizedZ - z) ** 2
+        ));
+      }
+      return 1 - nearest + jitter;
+    }
+    if (distribution === 'bands') {
+      return 0.5 + 0.5 * Math.cos(reference.normalizedHeight * Math.PI * 10) + jitter;
+    }
+    if (distribution === 'asymmetric') {
+      return reference.normalizedX * 0.82 + reference.normalizedHeight * 0.08 + jitter;
+    }
+    return jitter;
+  };
+  if (distribution === 'clusters' || distribution === 'bands' || distribution === 'asymmetric') {
+    candidates = candidates
+      .sort((a, b) => score(b) - score(a))
+      .slice(0, Math.max(count, Math.round(candidates.length * 0.5)));
+  } else {
+    candidates = orderUniformHairReferences(candidates);
+  }
+  const ordered = growth.symmetrical
+    ? orderSymmetricHairReferences(candidates)
+    : candidates;
+  return expandHairReferences(ordered.length ? ordered : candidates, count);
 }
 
 export function bakeAvatarSurfaceGeometry(source) {
@@ -388,19 +734,38 @@ function disposeMaterial(material) {
   else material?.dispose?.();
 }
 
-function createHairShapeMesh(shape, maxInstances) {
-  let geometry;
-  if (shape === 'ribbon') geometry = new THREE.PlaneGeometry(1, 1);
-  else if (shape === 'rod') geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 5, 1, false);
-  else geometry = new THREE.ConeGeometry(0.68, 1, 5, 1, false);
-  const material = new THREE.MeshBasicMaterial({
+function createHairShapeMaterial(lighting = 'scene') {
+  const common = {
     color: '#ffffff',
     transparent: true,
     opacity: 0.96,
     depthWrite: false,
-    side: THREE.DoubleSide,
-    toneMapped: false
+    side: THREE.DoubleSide
+  };
+  if (lighting === 'flat') {
+    return new THREE.MeshBasicMaterial({
+      ...common,
+      toneMapped: false
+    });
+  }
+  return new THREE.MeshStandardMaterial({
+    ...common,
+    roughness: 0.58,
+    metalness: 0.08
   });
+}
+
+function createHairShapeMesh(shape, maxInstances) {
+  let geometry;
+  if (shape === 'ribbon') geometry = new THREE.PlaneGeometry(1, 1);
+  else if (shape === 'rod') geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 5, 1, false);
+  else if (shape === 'sphere') geometry = new THREE.SphereGeometry(0.5, 7, 5);
+  else if (shape === 'triangle') geometry = new THREE.ConeGeometry(0.5, 1, 3, 1, false);
+  else if (shape === 'circle') geometry = new THREE.CircleGeometry(0.5, 20);
+  else if (shape === 'oval') geometry = new THREE.SphereGeometry(0.5, 7, 5);
+  else if (shape === 'spike') geometry = new THREE.ConeGeometry(0.32, 1, 7, 1, false);
+  else geometry = new THREE.ConeGeometry(0.68, 1, 5, 1, false);
+  const material = createHairShapeMaterial();
   const mesh = new THREE.InstancedMesh(geometry, material, maxInstances);
   // Allocate the instance-color attribute before the first render. Without it,
   // Three can compile a zero-count mesh without USE_INSTANCING_COLOR and the
@@ -410,6 +775,8 @@ function createHairShapeMesh(shape, maxInstances) {
   mesh.instanceColor.needsUpdate = true;
   material.needsUpdate = true;
   mesh.name = `CyberSubinHair${shape[0].toUpperCase()}${shape.slice(1)}`;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   mesh.count = 0;
   mesh.frustumCulled = false;
   mesh.renderOrder = 12;
@@ -459,11 +826,11 @@ function createHairVisual(maxStrands, segments) {
   tips.renderOrder = 13;
 
   const maximumShapeSegments = maxStrands * segments;
-  const shapeMeshes = {
-    ribbon: createHairShapeMesh('ribbon', maximumShapeSegments),
-    rod: createHairShapeMesh('rod', maximumShapeSegments),
-    tuft: createHairShapeMesh('tuft', maximumShapeSegments)
-  };
+  const shapeMeshes = Object.fromEntries(
+    HAIR_SHAPE_OPTIONS
+      .filter((shape) => shape !== 'line')
+      .map((shape) => [shape, createHairShapeMesh(shape, maximumShapeSegments)])
+  );
 
   const group = new THREE.Group();
   group.name = 'CyberSubinFullBodyHair';
@@ -598,11 +965,42 @@ export function createAvatarEffects({
   function syncHairShapeVisibility() {
     const lineVisible = settings.hair.shape === 'line';
     hair.lines.visible = lineVisible;
-    hair.tips.visible = lineVisible;
+    hair.tips.visible = lineVisible && settings.hair.lengthMode !== 'head';
     for (const [shape, mesh] of Object.entries(hair.shapeMeshes)) {
       mesh.visible = settings.hair.shape === shape;
       if (!mesh.visible) mesh.count = 0;
     }
+  }
+
+  function syncHairLighting() {
+    const flat = settings.hair.lighting === 'flat';
+    for (const mesh of Object.values(hair.shapeMeshes)) {
+      const materialMatches = flat
+        ? mesh.material?.isMeshBasicMaterial
+        : mesh.material?.isMeshStandardMaterial;
+      if (!materialMatches) {
+        const previousMaterial = mesh.material;
+        mesh.material = createHairShapeMaterial(settings.hair.lighting);
+        mesh.material.needsUpdate = true;
+        disposeMaterial(previousMaterial);
+      }
+      // Flat hair is deliberately independent from both scene light and
+      // shadow maps. Scene-lit hair keeps the fully shaded behavior.
+      mesh.castShadow = !flat;
+      mesh.receiveShadow = !flat;
+    }
+  }
+
+  function rebuildHairReferences() {
+    hairReferences = createHairReferences(
+      root,
+      sourceMeshes,
+      maxHairStrands,
+      settings.hair.distribution,
+      settings.hair.growthPattern
+    );
+    hair.initialized = false;
+    hair.anchorPrevious.fill(0);
   }
 
   function updateVisibility() {
@@ -615,7 +1013,7 @@ export function createAvatarEffects({
   function setRoot(nextRoot) {
     root = nextRoot ?? null;
     sourceMeshes = collectSourceMeshes(root);
-    hairReferences = createSampleReferences(sourceMeshes, maxHairStrands, 11, true);
+    rebuildHairReferences();
     interiorReferences = createSampleReferences(sourceMeshes, maxInteriorParticles, 29, true);
     sculptureReferences = createSampleReferences(sourceMeshes, 3200, 47);
     boneWorldPositions.clear();
@@ -643,7 +1041,10 @@ export function createAvatarEffects({
     const nextResolvedSettings = sanitizeAvatarEffectSettings(nextSettings);
     const resetHair = previousHair.length !== nextResolvedSettings.hair.length
       || previousHair.density !== nextResolvedSettings.hair.density
-      || previousHair.coverage !== nextResolvedSettings.hair.coverage;
+      || previousHair.coverage !== nextResolvedSettings.hair.coverage
+      || previousHair.lengthMode !== nextResolvedSettings.hair.lengthMode;
+    const redistributeHair = previousHair.distribution !== nextResolvedSettings.hair.distribution
+      || previousHair.growthPattern !== nextResolvedSettings.hair.growthPattern;
     const retuneHairPhysics = previousHair.flexibility !== nextResolvedSettings.hair.flexibility
       || previousHair.weight !== nextResolvedSettings.hair.weight;
     settings = nextResolvedSettings;
@@ -651,7 +1052,8 @@ export function createAvatarEffects({
     // are visible, but never destroys the capture history. A form change still
     // clears because dot and surface snapshots use incompatible geometry.
     if (previousSculptureForm !== settings.sculpture.form) clearSculpture();
-    if (resetHair) hair.initialized = false;
+    if (redistributeHair) rebuildHairReferences();
+    else if (resetHair) hair.initialized = false;
     else if (retuneHairPhysics && hair.initialized) {
       // Remove most stored oscillation when material controls change. The
       // current shape is preserved, then continues naturally under the new
@@ -669,6 +1071,7 @@ export function createAvatarEffects({
     hair.lines.material.opacity = settings.hair.coverage === 'full' ? 1 : 0.86;
     hair.tips.material.size = 0.0045 * settings.hair.thickness * coatScale;
     hair.tips.material.opacity = settings.hair.coverage === 'full' ? 0.98 : 0.8;
+    syncHairLighting();
     syncHairShapeVisibility();
     interior.points.material.size = 0.009 * settings.interior.size;
     interior.points.material.opacity = settings.interior.opacity;
@@ -706,9 +1109,10 @@ export function createAvatarEffects({
       tempHairDirection.set(0, -1, 0).lerp(tempHairOutward, settings.hair.outwardBias);
       if (tempHairDirection.lengthSq() < 0.000001) tempHairDirection.copy(tempHairOutward);
       tempHairDirection.normalize();
+      const lengthScale = resolveHairLengthScale(settings.hair.lengthMode, reference);
       for (let segment = 0; segment <= hair.segments; segment += 1) {
         const offset = (index * (hair.segments + 1) + segment) * 3;
-        const spread = segment * settings.hair.length / hair.segments;
+        const spread = segment * settings.hair.length * lengthScale / hair.segments;
         hair.nodePositions[offset] = tempAnchor.x + tempHairDirection.x * spread;
         hair.nodePositions[offset + 1] = tempAnchor.y + tempHairDirection.y * spread;
         hair.nodePositions[offset + 2] = tempAnchor.z + tempHairDirection.z * spread;
@@ -770,14 +1174,59 @@ export function createAvatarEffects({
     );
     tempHairObject.position.copy(tempHairMidpoint);
     tempHairObject.quaternion.setFromUnitVectors(HAIR_LOCAL_AXIS, tempHairDirection);
+    const shapeWidth = settings.hair.shapeWidth;
+    const shapeLength = settings.hair.shapeLength;
+    const shapeDepth = settings.hair.shapeDepth;
     if (settings.hair.shape === 'ribbon') {
-      tempHairObject.scale.set(0.012 * thickness, segmentLength, 1);
+      tempHairObject.scale.set(0.012 * thickness * shapeWidth, segmentLength * shapeLength, 1);
     } else if (settings.hair.shape === 'rod') {
       const radius = 0.0065 * thickness;
-      tempHairObject.scale.set(radius, segmentLength, radius);
+      tempHairObject.scale.set(radius * shapeWidth, segmentLength * shapeLength, radius * shapeDepth);
+    } else if (settings.hair.shape === 'sphere') {
+      const radius = 0.024 * thickness;
+      tempHairObject.scale.set(radius * shapeWidth, radius * shapeLength, radius * shapeDepth);
+    } else if (settings.hair.shape === 'circle') {
+      // CircleGeometry has a 0.5-unit radius. Keep the disc in its native XY
+      // plane so local Y follows the strand, then move its center one rendered
+      // radius away from the skin. The local -Y perimeter now lands exactly on
+      // the hair root instead of the body intersecting the middle of the disc.
+      const diameter = Math.max(0.026 * thickness, segmentLength * 0.72);
+      tempHairObject.scale.set(diameter * shapeWidth, diameter * shapeLength, diameter);
+      tempHairObject.position.set(
+        hair.nodePositions[startOffset],
+        hair.nodePositions[startOffset + 1],
+        hair.nodePositions[startOffset + 2]
+      ).addScaledVector(tempHairDirection, diameter * shapeLength * 0.5);
+    } else if (settings.hair.shape === 'oval') {
+      const radius = Math.max(0.022 * thickness, segmentLength * 0.24);
+      const renderedLength = segmentLength * shapeLength;
+      tempHairObject.scale.set(radius * shapeWidth, renderedLength, radius * 0.72 * shapeDepth);
+      tempHairObject.position.set(
+        hair.nodePositions[startOffset],
+        hair.nodePositions[startOffset + 1],
+        hair.nodePositions[startOffset + 2]
+      ).addScaledVector(tempHairDirection, renderedLength * 0.5);
+    } else if (settings.hair.shape === 'triangle') {
+      const radius = 0.03 * thickness;
+      const renderedLength = segmentLength * shapeLength;
+      tempHairObject.scale.set(radius * shapeWidth, renderedLength, radius * shapeDepth);
+      tempHairObject.position.set(
+        hair.nodePositions[startOffset],
+        hair.nodePositions[startOffset + 1],
+        hair.nodePositions[startOffset + 2]
+      ).addScaledVector(tempHairDirection, renderedLength * 0.5);
+    } else if (settings.hair.shape === 'spike') {
+      const radius = 0.012 * thickness;
+      const renderedLength = segmentLength * shapeLength;
+      tempHairObject.scale.set(radius * shapeWidth, renderedLength, radius * shapeDepth);
+      tempHairObject.position.set(
+        hair.nodePositions[startOffset],
+        hair.nodePositions[startOffset + 1],
+        hair.nodePositions[startOffset + 2]
+      ).addScaledVector(tempHairDirection, renderedLength * 0.5);
     } else {
       const radius = 0.009 * thickness;
-      tempHairObject.scale.set(radius, segmentLength, radius);
+      tempHairObject.scale.set(radius * shapeWidth, segmentLength * shapeLength, radius * shapeDepth);
     }
     tempHairObject.updateMatrix();
     mesh.setMatrixAt(instanceIndex, tempHairObject.matrix);
@@ -797,7 +1246,6 @@ export function createAvatarEffects({
     root.getWorldPosition(tempHairCenter);
     tempHairCenter.y += 1.35;
     const dt = Math.min(delta, 1 / 30);
-    const segmentLength = settings.hair.length / hair.segments;
     const outwardBlend = THREE.MathUtils.clamp(settings.hair.outwardBias, 0, 1);
     const physics = resolveHairPhysicsProfile(
       settings.hair.flexibility,
@@ -816,6 +1264,7 @@ export function createAvatarEffects({
       inertialResponse
     } = physics;
     const activeShapeMesh = hair.shapeMeshes[settings.hair.shape] ?? null;
+    const wholeStrandShape = WHOLE_STRAND_HAIR_SHAPES.has(settings.hair.shape);
     let shapeInstanceIndex = 0;
     const linePosition = hair.positions;
     const lineColor = hair.colors;
@@ -823,6 +1272,8 @@ export function createAvatarEffects({
 
     for (let index = 0; index < activeCount; index += 1) {
       const reference = hairReferences[index];
+      const lengthScale = resolveHairLengthScale(settings.hair.lengthMode, reference);
+      const segmentLength = settings.hair.length * lengthScale / hair.segments;
       reference.source.updateWorldMatrix(true, false);
       readWorldVertex(reference, tempAnchor);
       const rootOffset = index * (hair.segments + 1) * 3;
@@ -946,7 +1397,7 @@ export function createAvatarEffects({
         lineColor.set([tempColorA.r, tempColorA.g, tempColorA.b], lineOffset);
         resolveAvatarEffectColor(tempColorA, settings.hair.pattern, heightAmount, reference.seed + (segment + 1) * 0.1, settings.hair.colors);
         lineColor.set([tempColorA.r, tempColorA.g, tempColorA.b], lineOffset + 3);
-        if (activeShapeMesh) {
+        if (activeShapeMesh && !wholeStrandShape && lengthScale > 0.001) {
           tempHairColor.setRGB(
             (lineColor[lineOffset] + lineColor[lineOffset + 3]) * 0.5,
             (lineColor[lineOffset + 1] + lineColor[lineOffset + 4]) * 0.5,
@@ -962,6 +1413,17 @@ export function createAvatarEffects({
           );
           shapeInstanceIndex += 1;
         }
+      }
+      if (activeShapeMesh && wholeStrandShape && lengthScale > 0.001) {
+        setHairShapeInstance(
+          activeShapeMesh,
+          shapeInstanceIndex,
+          rootOffset,
+          rootOffset + hair.segments * 3,
+          settings.hair.thickness * (settings.hair.coverage === 'full' ? 1.45 : 1),
+          tempColorA
+        );
+        shapeInstanceIndex += 1;
       }
     }
     hair.lines.geometry.setDrawRange(0, activeCount * hair.segments * 2);
@@ -1310,8 +1772,17 @@ export function createAvatarEffects({
     getDebugState: () => ({
       mode,
       hairCoverage: settings.hair.coverage,
+      hairLighting: settings.hair.lighting,
       hairShape: settings.hair.shape,
+      hairGrowthPattern: settings.hair.growthPattern,
+      hairDistribution: settings.hair.distribution,
+      hairLengthMode: settings.hair.lengthMode,
       hairOutwardBias: settings.hair.outwardBias,
+      hairReferenceCount: hairReferences.length,
+      hairLeftReferences: hairReferences.filter((reference) => getHairReferenceSide(reference) === 'left').length,
+      hairRightReferences: hairReferences.filter((reference) => getHairReferenceSide(reference) === 'right').length,
+      hairHeadReferences: hairReferences.filter((reference) => reference.isHead).length,
+      hairHandReferences: hairReferences.filter((reference) => reference.isHand).length,
       hairStrands: resolveHairActiveCount(settings.hair.density, hairReferences.length, settings.hair.coverage),
       interiorParticles: Math.min(interiorReferences.length, Math.round(settings.interior.density)),
       sculptureForm: settings.sculpture.form,

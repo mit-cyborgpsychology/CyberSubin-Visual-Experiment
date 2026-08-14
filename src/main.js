@@ -63,11 +63,14 @@ import {
   AVATAR_EFFECT_MODES,
   AVATAR_EFFECT_PATTERNS,
   HAIR_COVERAGE_OPTIONS,
+  HAIR_GROWTH_PATTERN_OPTIONS,
+  HAIR_LIGHTING_OPTIONS,
   HAIR_SHAPE_OPTIONS,
   SCULPTURE_FORM_OPTIONS,
   SCULPTURE_RETENTION_OPTIONS,
   createAvatarEffects,
   createDefaultAvatarEffectSettings,
+  resolveHairGrowthPattern,
   sanitizeAvatarEffectSettings
 } from './avatar-effects.js';
 import { posture } from '../59.ts';
@@ -234,6 +237,18 @@ const AVATAR_EFFECT_SLIDER_CONFIG = Object.freeze({
     integer: false,
     format: (value) => `${value.toFixed(1)}×`
   },
+  'hair.shapeWidth': {
+    integer: false,
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  'hair.shapeLength': {
+    integer: false,
+    format: (value) => `${value.toFixed(2)}×`
+  },
+  'hair.shapeDepth': {
+    integer: false,
+    format: (value) => `${value.toFixed(2)}×`
+  },
   'hair.density': {
     integer: true,
     format: (value) => Math.round(value).toLocaleString()
@@ -341,6 +356,21 @@ const LIGHTING_PRESETS = {
     rim: ['#edf0f2', 2.5, [-4, 4, -4]],
     fill: ['#d7d9db', 2.8, [4, 2, -2]],
     exposure: 1.3
+  },
+  flat: {
+    hemisphere: ['#f2f2f0', '#f2f2f0', 3.1],
+    key: ['#ffffff', 0, [0, 5, 5]],
+    rim: ['#ffffff', 0, [0, 4, -5]],
+    fill: ['#ffffff', 0, [4, 2, 0]],
+    exposure: 1.08,
+    flat: true
+  },
+  under: {
+    hemisphere: ['#5d6265', '#010203', 0.42],
+    key: ['#f7f3ec', 5.8, [0, -3.8, 4.2]],
+    rim: ['#e5eaec', 1.2, [-3.5, 0.2, -4]],
+    fill: ['#8e9497', 0.18, [4, 0.4, 1]],
+    exposure: 1.04
   },
   softFront: {
     hemisphere: ['#c5c9cb', '#040505', 1.6],
@@ -774,7 +804,9 @@ const ui = {
   ),
   avatarEffectPatternButtons: [...document.querySelectorAll('[data-avatar-effect-pattern]')],
   avatarHairCoverageButtons: [...document.querySelectorAll('[data-avatar-hair-coverage]')],
+  avatarHairLightingButtons: [...document.querySelectorAll('[data-avatar-hair-lighting]')],
   avatarHairShapeButtons: [...document.querySelectorAll('[data-avatar-hair-shape]')],
+  avatarHairGrowthPatternButtons: [...document.querySelectorAll('[data-avatar-hair-growth-pattern]')],
   avatarEffectColorInputs: [...document.querySelectorAll('[data-avatar-effect-color]')],
   avatarSculptureFormButtons: [...document.querySelectorAll('[data-avatar-sculpture-form]')],
   avatarSculptureDotsOnlyControls: [...document.querySelectorAll('[data-sculpture-dots-only]')],
@@ -3927,7 +3959,9 @@ function applyLightingSetup() {
   const lightColor = color?.light;
   const intensity = state.lightingIntensity;
   ambient.color.set(lightColor ?? preset.hemisphere[0]);
-  ambient.groundColor.set(color?.ground ?? preset.hemisphere[1]);
+  ambient.groundColor.set(preset.flat
+    ? (lightColor ?? preset.hemisphere[1])
+    : (color?.ground ?? preset.hemisphere[1]));
   ambient.intensity = preset.hemisphere[2] * intensity;
   keyLight.color.set(lightColor ?? preset.key[0]);
   keyLight.intensity = preset.key[1] * intensity;
@@ -3995,7 +4029,9 @@ function updateAvatarEffectDescription() {
     const density = hair.coverage === 'full'
       ? `AUTO-DENSE COAT · ${hair.density.toLocaleString()} BASE FIBERS`
       : `${hair.density.toLocaleString()} OPEN FIBERS`;
-    ui.avatarEffectDescription.textContent = `${coverage} · ${hair.shape.toUpperCase()} SHAPE · ${direction} · ${density} · ${hair.length.toFixed(2)} M · ${Math.round(hair.flexibility * 100)}% FLEXIBLE · ${hair.weight.toFixed(2)}× GRAVITY · ${hair.motionResponse.toFixed(2)}× BODY RESPONSE · ${hair.curl.toFixed(2)}× CURL`;
+    const growthPattern = hair.growthPattern.replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase();
+    const lighting = hair.lighting === 'flat' ? 'FLAT / UNLIT' : 'SCENE LIT';
+    ui.avatarEffectDescription.textContent = `${coverage} · ${lighting} · ${hair.shape.toUpperCase()} SHAPE · ${hair.shapeWidth.toFixed(2)}× WIDTH · ${hair.shapeLength.toFixed(2)}× LENGTH · ${hair.shapeDepth.toFixed(2)}× DEPTH · ${growthPattern} GROWTH · ${direction} · ${density} · ${hair.length.toFixed(2)} M · ${Math.round(hair.flexibility * 100)}% FLEXIBLE · ${hair.weight.toFixed(2)}× GRAVITY · ${hair.motionResponse.toFixed(2)}× BODY RESPONSE · ${hair.curl.toFixed(2)}× CURL`;
     return;
   }
   if (state.avatarEffectMode === 'interior') {
@@ -4104,6 +4140,22 @@ function setAvatarHairCoverage(coverage) {
   updateAvatarEffectDescription();
 }
 
+function syncAvatarHairLighting(lighting) {
+  ui.avatarHairLightingButtons.forEach((button) => {
+    const active = button.dataset.avatarHairLighting === lighting;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function setAvatarHairLighting(lighting) {
+  if (!HAIR_LIGHTING_OPTIONS.includes(lighting)) return;
+  state.avatarEffectSettings.hair.lighting = lighting;
+  syncAvatarHairLighting(lighting);
+  avatarEffects.setSettings(state.avatarEffectSettings);
+  updateAvatarEffectDescription();
+}
+
 function syncAvatarHairShape(shape) {
   ui.avatarHairShapeButtons.forEach((button) => {
     const active = button.dataset.avatarHairShape === shape;
@@ -4116,6 +4168,25 @@ function setAvatarHairShape(shape) {
   if (!HAIR_SHAPE_OPTIONS.includes(shape)) return;
   state.avatarEffectSettings.hair.shape = shape;
   syncAvatarHairShape(shape);
+  avatarEffects.setSettings(state.avatarEffectSettings);
+  updateAvatarEffectDescription();
+}
+
+function syncAvatarHairGrowthPattern(growthPattern) {
+  ui.avatarHairGrowthPatternButtons.forEach((button) => {
+    const active = button.dataset.avatarHairGrowthPattern === growthPattern;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function setAvatarHairGrowthPattern(growthPattern) {
+  if (!HAIR_GROWTH_PATTERN_OPTIONS.includes(growthPattern)) return;
+  const resolved = resolveHairGrowthPattern(growthPattern);
+  state.avatarEffectSettings.hair.growthPattern = resolved.key;
+  state.avatarEffectSettings.hair.distribution = resolved.distribution;
+  state.avatarEffectSettings.hair.lengthMode = resolved.lengthMode;
+  syncAvatarHairGrowthPattern(resolved.key);
   avatarEffects.setSettings(state.avatarEffectSettings);
   updateAvatarEffectDescription();
 }
@@ -4171,7 +4242,9 @@ function applyAvatarEffectSettings(nextSettings) {
     input.value = state.avatarEffectSettings[section].colors[Number(indexValue)];
   }
   syncAvatarHairCoverage(state.avatarEffectSettings.hair.coverage);
+  syncAvatarHairLighting(state.avatarEffectSettings.hair.lighting);
   syncAvatarHairShape(state.avatarEffectSettings.hair.shape);
+  syncAvatarHairGrowthPattern(state.avatarEffectSettings.hair.growthPattern);
   syncAvatarSculptureForm(state.avatarEffectSettings.sculpture.form);
   const retention = state.avatarEffectSettings.sculpture.retention;
   ui.avatarSculptureRetentionButtons.forEach((button) => {
@@ -7789,8 +7862,16 @@ for (const button of ui.avatarHairCoverageButtons) {
   button.addEventListener('click', () => setAvatarHairCoverage(button.dataset.avatarHairCoverage));
 }
 
+for (const button of ui.avatarHairLightingButtons) {
+  button.addEventListener('click', () => setAvatarHairLighting(button.dataset.avatarHairLighting));
+}
+
 for (const button of ui.avatarHairShapeButtons) {
   button.addEventListener('click', () => setAvatarHairShape(button.dataset.avatarHairShape));
+}
+
+for (const button of ui.avatarHairGrowthPatternButtons) {
+  button.addEventListener('click', () => setAvatarHairGrowthPattern(button.dataset.avatarHairGrowthPattern));
 }
 
 for (const button of ui.avatarSculptureFormButtons) {

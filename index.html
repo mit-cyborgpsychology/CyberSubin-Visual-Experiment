@@ -131,12 +131,50 @@
                         <button type="button" data-avatar-hair-coverage="open" class="active">OPEN FIBERS</button>
                         <button type="button" data-avatar-hair-coverage="full">FULL COAT</button>
                       </div>
+                      <div class="trace-option-group option-grid--two" aria-label="Hair surface lighting">
+                        <span>HAIR LIGHTING</span>
+                        <button type="button" data-avatar-hair-lighting="scene" class="active">SCENE LIT</button>
+                        <button type="button" data-avatar-hair-lighting="flat">FLAT / UNLIT</button>
+                      </div>
                       <div class="trace-option-group option-grid--two" aria-label="Hair strand shape">
                         <span>STRAND SHAPE</span>
                         <button type="button" data-avatar-hair-shape="line" class="active">LINE</button>
                         <button type="button" data-avatar-hair-shape="ribbon">FLAT RIBBON</button>
                         <button type="button" data-avatar-hair-shape="rod">ROD</button>
                         <button type="button" data-avatar-hair-shape="tuft">TUFT</button>
+                        <button type="button" data-avatar-hair-shape="sphere">SPHERE</button>
+                        <button type="button" data-avatar-hair-shape="triangle">ONE BIG TRIANGLE</button>
+                        <button type="button" data-avatar-hair-shape="circle">CIRCLE</button>
+                        <button type="button" data-avatar-hair-shape="oval">OVAL</button>
+                        <button type="button" data-avatar-hair-shape="spike">SPIKE</button>
+                      </div>
+                      <label class="flow-slider-group" for="avatar-hair-shape-width">
+                        <span>SHAPE WIDTH / X <output data-avatar-effect-value="hair.shapeWidth">1.00×</output></span>
+                        <input id="avatar-hair-shape-width" data-avatar-effect-slider="hair.shapeWidth" type="range" min="0.25" max="3" step="0.05" value="1" aria-label="Hair geometry width multiplier">
+                      </label>
+                      <label class="flow-slider-group" for="avatar-hair-shape-length">
+                        <span>SHAPE LENGTH / Y <output data-avatar-effect-value="hair.shapeLength">1.00×</output></span>
+                        <input id="avatar-hair-shape-length" data-avatar-effect-slider="hair.shapeLength" type="range" min="0.25" max="3" step="0.05" value="1" aria-label="Hair geometry length multiplier">
+                      </label>
+                      <label class="flow-slider-group" for="avatar-hair-shape-depth">
+                        <span>SHAPE DEPTH / Z <output data-avatar-effect-value="hair.shapeDepth">1.00×</output></span>
+                        <input id="avatar-hair-shape-depth" data-avatar-effect-slider="hair.shapeDepth" type="range" min="0.25" max="3" step="0.05" value="1" aria-label="Hair geometry depth multiplier for three-dimensional shapes">
+                      </label>
+                      <div class="trace-option-group option-grid--two" aria-label="Combined hair growth pattern">
+                        <span>GROWTH PATTERN</span>
+                        <button type="button" data-avatar-hair-growth-pattern="uniform">UNIFORM</button>
+                        <button type="button" data-avatar-hair-growth-pattern="organic" class="active">ORGANIC</button>
+                        <button type="button" data-avatar-hair-growth-pattern="headOnly">HEAD ONLY</button>
+                        <button type="button" data-avatar-hair-growth-pattern="headHands">HEAD + HANDS</button>
+                        <button type="button" data-avatar-hair-growth-pattern="wingHands">WING: HANDS ONLY</button>
+                        <button type="button" data-avatar-hair-growth-pattern="bodyRhythm">BODY RHYTHM</button>
+                        <button type="button" data-avatar-hair-growth-pattern="topCascade">TOP CASCADE</button>
+                        <button type="button" data-avatar-hair-growth-pattern="shoulderHalo">SHOULDER HALO</button>
+                        <button type="button" data-avatar-hair-growth-pattern="legBloom">LEG BLOOM</button>
+                        <button type="button" data-avatar-hair-growth-pattern="torsoPulse">TORSO PULSE</button>
+                        <button type="button" data-avatar-hair-growth-pattern="leftSweep">LEFT SWEEP</button>
+                        <button type="button" data-avatar-hair-growth-pattern="rightSweep">RIGHT SWEEP</button>
+                        <button type="button" data-avatar-hair-growth-pattern="diagonalFlow">DIAGONAL FLOW</button>
                       </div>
                       <label class="flow-slider-group" for="avatar-hair-outward-bias">
                         <span>DYNAMIC FLOW ↔ RADIAL OUTWARD <output data-avatar-effect-value="hair.outwardBias">0% OUTWARD</output></span>
@@ -275,6 +313,8 @@
                       <span>LIGHTING</span>
                       <button type="button" data-lighting-preset="studio">STUDIO</button>
                       <button type="button" data-lighting-preset="bright">BRIGHT</button>
+                      <button type="button" data-lighting-preset="flat">FLAT LIGHT</button>
+                      <button type="button" data-lighting-preset="under">UNDER LIGHT</button>
                       <button type="button" data-lighting-preset="softFront">SOFT FRONT</button>
                       <button type="button" data-lighting-preset="side">SIDE LIGHT</button>
                       <button type="button" data-lighting-preset="highSide">HIGH SIDE</button>
