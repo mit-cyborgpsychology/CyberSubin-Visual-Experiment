@@ -73,6 +73,11 @@ import {
   resolveHairGrowthPattern,
   sanitizeAvatarEffectSettings
 } from './avatar-effects.js';
+import {
+  DEFAULT_PLAYBACK_SPEED,
+  PLAYBACK_SPEED_OPTIONS,
+  getPlaybackTimeScale
+} from './playback-speed.js';
 import { posture } from '../59.ts';
 import './styles.css';
 
@@ -118,8 +123,7 @@ const FADING_TRAIL_RETENTION_LIMIT = 4096;
 const CURVE_HISTORY_LENGTH = 108;
 const MODEL_COUNT = 59;
 const DEFAULT_MOVEMENT_ID = '59';
-const DEFAULT_SPEED = 3;
-const PLAYBACK_SPEED_OPTIONS = Object.freeze([0.05, 0.1, 0.5, 1, 1.5, 2, 3, 4, 5, 10, 20, 50]);
+const DEFAULT_SPEED = DEFAULT_PLAYBACK_SPEED;
 const DEFAULT_AVATAR_COLOR = 'lightGrey';
 const DEFAULT_AVATAR_GRADIENT_COLOR = '#d9dcde';
 const DEFAULT_SURFACE_MODE = 'smooth';
@@ -7501,7 +7505,7 @@ function animate() {
   const rawDelta = Math.min(clock.getDelta(), 0.08);
 
   if (state.ready && state.mixer && state.action && state.playing) {
-    const baseFrameDelta = rawDelta * state.speed;
+    const baseFrameDelta = rawDelta * getPlaybackTimeScale(state.speed);
     const energyPlaybackRate = state.no60ModificationMode
       ? getNo60EnergyPlaybackRate(state.no60ModificationValues)
       : 1;
