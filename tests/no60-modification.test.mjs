@@ -5,6 +5,7 @@ import {
   createDefaultNo60ModificationValues,
   createNo60ModificationRuntime,
   getNo60BoneRegionTags,
+  getNo60ExternalSpacePlaybackRate,
   resolveNo60ModificationValue
 } from '../src/no60-modification.js';
 
@@ -30,6 +31,43 @@ function createRig() {
   add('LeftLeg', leftUpLeg);
   const rightUpLeg = add('RightUpLeg', hips);
   add('RightLeg', rightUpLeg);
+  return { root, bones };
+}
+
+function createAxisCollisionRig() {
+  const root = new THREE.Group();
+  const bones = {};
+  const add = (name, parent, position) => {
+    const bone = new THREE.Bone();
+    bone.name = name;
+    bone.position.fromArray(position);
+    parent.add(bone);
+    bones[name] = bone;
+    return bone;
+  };
+
+  const hips = add('Hips', root, [0, 0, 0]);
+  const spine = add('Spine', hips, [0, 0.7, 0]);
+  const spine2 = add('Spine2', spine, [0, 0.55, 0]);
+  add('Head', spine2, [0, 0.45, 0]);
+
+  const leftShoulder = add('LeftShoulder', spine2, [0.18, 0.28, 0]);
+  const leftArm = add('LeftArm', leftShoulder, [0.12, 0, 0]);
+  const leftForeArm = add('LeftForeArm', leftArm, [0.24, 0, 0]);
+  add('LeftHand', leftForeArm, [0.2, 0, 0]);
+
+  const rightShoulder = add('RightShoulder', spine2, [-0.18, 0.28, 0]);
+  const rightArm = add('RightArm', rightShoulder, [-0.12, 0, 0]);
+  const rightForeArm = add('RightForeArm', rightArm, [-0.24, 0, 0]);
+  add('RightHand', rightForeArm, [-0.2, 0, 0]);
+
+  const leftUpLeg = add('LeftUpLeg', hips, [0.14, -0.1, 0]);
+  const leftLeg = add('LeftLeg', leftUpLeg, [0, -0.45, 0]);
+  add('LeftFoot', leftLeg, [0, -0.45, 0.08]);
+  const rightUpLeg = add('RightUpLeg', hips, [-0.14, -0.1, 0]);
+  const rightLeg = add('RightLeg', rightUpLeg, [0, -0.45, 0]);
+  add('RightFoot', rightLeg, [0, -0.45, 0.08]);
+  root.updateMatrixWorld(true);
   return { root, bones };
 }
 
@@ -152,26 +190,213 @@ function testDeterministicRegionalApplications() {
     bones.LeftArm.quaternion.copy(angleAroundX(1));
     bones.RightArm.quaternion.copy(angleAroundX(1));
   });
-  assert.ok(curves.LeftArm.quaternion.angleTo(new THREE.Quaternion()) < 0.35);
+  assertNear(
+    curves.LeftArm.quaternion.angleTo(new THREE.Quaternion()),
+    1,
+    0.001,
+    'Straightening should preserve a held source pose rather than collapsing toward rest'
+  );
   assertNear(curves.RightArm.quaternion.angleTo(new THREE.Quaternion()), 1, 0.001);
 
   const axes = applySingleEffect('axes', 'arms', 0, (bones) => {
     bones.LeftArm.quaternion.copy(angleAroundX(1));
     bones.LeftUpLeg.quaternion.copy(angleAroundX(1));
   });
-  assert.ok(axes.LeftArm.quaternion.angleTo(new THREE.Quaternion()) < 0.4);
+  assertNear(
+    axes.LeftArm.quaternion.angleTo(new THREE.Quaternion()),
+    1,
+    0.001,
+    'Axis Points at or below 100% must preserve the original choreography'
+  );
   assertNear(axes.LeftUpLeg.quaternion.angleTo(new THREE.Quaternion()), 1, 0.001);
 
   const space = applySingleEffect('space', 'arms', 0, (bones) => {
     bones.LeftArm.quaternion.copy(angleAroundX(1));
     bones.LeftUpLeg.quaternion.copy(angleAroundX(1));
   });
-  assertNear(space.LeftArm.quaternion.angleTo(new THREE.Quaternion()), 0.32, 0.01);
+  assertNear(
+    space.LeftArm.quaternion.angleTo(new THREE.Quaternion()),
+    1,
+    0.001,
+    'External space must never compress or reshape a source pose'
+  );
   assertNear(space.LeftUpLeg.quaternion.angleTo(new THREE.Quaternion()), 1, 0.001);
 
   const body = applySingleEffect('body', 'arms', 90);
   assert.ok(body.LeftArm.quaternion.angleTo(new THREE.Quaternion()) > 1.5);
   assertNear(body.LeftUpLeg.quaternion.angleTo(new THREE.Quaternion()), 0, 0.001);
+}
+
+function simulateAxisTouches(axisValue, seconds = 6.2, playbackScale = 1) {
+  const { root, bones } = createAxisCollisionRig();
+  const runtime = createNo60ModificationRuntime(root);
+  const values = createDefaultNo60ModificationValues();
+  values.axes.whole = axisValue;
+  const originalLocalPositions = Object.fromEntries(
+    Object.entries(bones).map(([name, bone]) => [name, bone.position.clone()])
+  );
+  const previousOutput = Object.fromEntries(
+    Object.entries(bones).map(([name, bone]) => [name, bone.quaternion.clone()])
+  );
+  let maximumFrameTurn = 0;
+  let maximumFrameTurnDetail = null;
+  const frames = Math.ceil(seconds * 60);
+
+  for (let frame = 0; frame < frames; frame += 1) {
+    // Model the animation mixer restoring the untouched source pose before
+    // every modifier pass. The scheduled reach must blend out and return to
+    // this pose without accumulating deformation.
+    for (const bone of Object.values(bones)) bone.quaternion.identity();
+    applyNo60Modifications({ runtime, values, delta: playbackScale / 60 });
+    for (const [name, bone] of Object.entries(bones)) {
+      const frameTurn = previousOutput[name].angleTo(bone.quaternion);
+      if (frameTurn > maximumFrameTurn) {
+        maximumFrameTurn = frameTurn;
+        maximumFrameTurnDetail = { frame, name, frameTurn };
+      }
+      previousOutput[name].copy(bone.quaternion);
+    }
+  }
+  return {
+    root,
+    bones,
+    runtime,
+    originalLocalPositions,
+    maximumFrameTurn,
+    maximumFrameTurnDetail
+  };
+}
+
+function testAxisPointUsesTimedTwoBoneTouches() {
+  const high = simulateAxisTouches(200, 60);
+  assert.ok(
+    high.runtime.axisTouchCount >= 12,
+    `200% should remain highly active despite its organic gaps (${high.runtime.axisTouchCount})`
+  );
+  const cadence = high.runtime.axisTouchStartTimes.slice(1).map(
+    (time, index) => time - high.runtime.axisTouchStartTimes[index]
+  );
+  const roundedCadence = new Set(cadence.map((gap) => gap.toFixed(2)));
+  assert.ok(
+    roundedCadence.size >= 4,
+    `Maximum-strength touches should use visibly varied gaps (${[...roundedCadence].join(', ')})`
+  );
+  assert.ok(
+    Math.min(...cadence) < 0.8 && Math.max(...cadence) > 1.2,
+    `Maximum-strength gaps should include quick responses and longer breaths (${cadence.join(', ')})`
+  );
+  const averageCadence = cadence.reduce((sum, gap) => sum + gap, 0) / cadence.length;
+  assert.ok(
+    averageCadence >= 1 && averageCadence <= 4.5,
+    `Maximum-strength gaps should remain active while respecting unfinished hand touches (${averageCadence})`
+  );
+  const doubleSpeed = simulateAxisTouches(200, 30, 2);
+  assert.equal(
+    doubleSpeed.runtime.axisTouchCount,
+    high.runtime.axisTouchCount,
+    'At 2x, the same choreography-space gesture count should occur in half the wall time'
+  );
+  const phrase = high.runtime.axisTouchHistory.slice(0, 12);
+  const handTouchEvents = phrase.filter(({ limbs }) =>
+    limbs.some((limb) => limb === 'leftArm' || limb === 'rightArm')
+  );
+  const footTouchEvents = phrase.filter(({ limbs }) =>
+    limbs.some((limb) => limb === 'leftLeg' || limb === 'rightLeg')
+  );
+  const doubleHandEvents = high.runtime.axisTouchHistory.filter(({ limbs }) =>
+    limbs.includes('leftArm') && limbs.includes('rightArm')
+  );
+  const singleHandEvents = high.runtime.axisTouchHistory.filter(({ limbs }) =>
+    limbs.length === 1 && (limbs[0] === 'leftArm' || limbs[0] === 'rightArm')
+  );
+  assert.ok(
+    phrase.length === 12 && handTouchEvents.length === 10 && footTouchEvents.length === 2,
+    `The recurring phrase should use exactly five hand-touch events per foot-touch event (${handTouchEvents.length}:${footTouchEvents.length})`
+  );
+  assert.ok(
+    doubleHandEvents.length >= 1,
+    'The recurring phrase should sometimes use both hands together'
+  );
+  assert.ok(
+    singleHandEvents.length >= 4,
+    'The recurring phrase should retain distinct one-hand gestures'
+  );
+  const durations = high.runtime.axisTouchHistory.map(({ duration }) => duration);
+  const distinctDurations = new Set(durations.map((duration) => duration.toFixed(2)));
+  assert.ok(
+    durations.every((duration) => duration >= 2.8 && duration <= 4.8)
+      && distinctDurations.size >= 5,
+    `Touches should use varied, substantially longer durations (${[...distinctDurations].join(', ')})`
+  );
+  assert.ok(
+    high.runtime.axisTouchHistory.every(({ approachDuration, holdDuration, releaseDuration }) =>
+      approachDuration >= 0.84 && holdDuration >= 1.064 && releaseDuration >= 0.448
+    ),
+    'Every organic touch should approach slowly, sustain contact, and release smoothly'
+  );
+  assert.ok(
+    high.runtime.axisTouchMaximumConcurrent >= 2,
+    'Independent limbs should overlap so slower touches do not reduce the 200% cadence'
+  );
+  assert.ok(
+    high.runtime.axisTouchHistory.some(({ targets }) => targets.some((target) => /head/.test(target))),
+    'Some hand gestures should touch the head'
+  );
+  assert.ok(
+    high.runtime.axisTouchHistory.some(({ targets }) => targets.some((target) => /leg|thigh/.test(target))),
+    'Some gestures should touch a leg landmark'
+  );
+  assert.ok(
+    high.runtime.axisTouchHistory.some(({ limbs }) =>
+      limbs.some((limb) => limb === 'leftLeg' || limb === 'rightLeg')
+    ),
+    'Occasional foot-led contacts should remain in the phrase'
+  );
+  assert.ok(
+    high.runtime.axisTouchMinimumDistanceRatio < 0.72,
+    `Hands and feet should visibly approach their body landmark (${high.runtime.axisTouchMinimumDistanceRatio})`
+  );
+  assert.ok(
+    high.runtime.axisTouchMinimumSurfaceClearance >= -0.001,
+    `Hands and feet must remain outside the anatomical contact envelope (${high.runtime.axisTouchMinimumSurfaceClearance})`
+  );
+  assert.ok(
+    high.maximumFrameTurn < 0.12,
+    `Every reach must approach and release without a one-frame snap (${JSON.stringify(high.maximumFrameTurnDetail)})`
+  );
+  for (const [name, originalPosition] of Object.entries(high.originalLocalPositions)) {
+    assert.ok(
+      high.bones[name].position.distanceTo(originalPosition) < 0.000001,
+      `${name} local offset and bone length must remain unchanged`
+    );
+    assert.ok(
+      high.bones[name].scale.distanceTo(new THREE.Vector3(1, 1, 1)) < 0.000001,
+      `${name} scale must remain unchanged`
+    );
+  }
+
+  const low = simulateAxisTouches(120, 60);
+  assert.ok(
+    low.runtime.axisTouchCount < high.runtime.axisTouchCount,
+    'Lower percentages should create fewer touches'
+  );
+  assert.ok(
+    low.runtime.axisTouchHistory.every(({ duration }) => duration >= 2.8 && duration <= 4.8),
+    'Lower percentages should change touch frequency without leaving the same slow duration range'
+  );
+
+  for (const neutralValue of [100, 50, 0]) {
+    const neutral = simulateAxisTouches(neutralValue, 4);
+    assert.equal(neutral.runtime.axisTouchCount, 0);
+    for (const bone of Object.values(neutral.bones)) {
+      assertNear(
+        bone.quaternion.angleTo(new THREE.Quaternion()),
+        0,
+        0.000001,
+        `${neutralValue}% Axis Points must preserve the source pose exactly`
+      );
+    }
+  }
 }
 
 function testCircularTravelSmoothsReversalsAndBoundaries() {
@@ -184,6 +409,7 @@ function testCircularTravelSmoothsReversalsAndBoundaries() {
   let sourceAngle = 0;
   let previousOutput = bones.LeftArm.quaternion.clone();
   let maximumContinuousStep = 0;
+  let maximumCurveMomentum = 0;
   let curveBeforeBoundary = null;
   let curveAfterBoundary = null;
 
@@ -201,6 +427,13 @@ function testCircularTravelSmoothsReversalsAndBoundaries() {
       curveBeforeBoundary = entry.curveRotation.clone();
     }
     applyNo60Modifications({ runtime, values, delta });
+    const currentEntry = runtime.entries.find(({ name }) => name === 'LeftArm');
+    if (frame > 12 && frame < 105) {
+      maximumCurveMomentum = Math.max(
+        maximumCurveMomentum,
+        currentEntry.curveRotation.angleTo(new THREE.Quaternion())
+      );
+    }
     const outputStep = previousOutput.angleTo(bones.LeftArm.quaternion);
     if (frame > 8 && frame !== 105) maximumContinuousStep = Math.max(maximumContinuousStep, outputStep);
     if (frame === 105) {
@@ -217,7 +450,7 @@ function testCircularTravelSmoothsReversalsAndBoundaries() {
     `Curved motion should not create a large frame-to-frame rotation (${maximumContinuousStep})`
   );
   assert.ok(
-    curveBeforeBoundary.angleTo(new THREE.Quaternion()) > 0.15,
+    maximumCurveMomentum > 0.15,
     'Higher curvature should accumulate visible circular momentum'
   );
   assert.ok(
@@ -322,7 +555,11 @@ function measureCircularResponse(value) {
   values.curves.leftArm = value;
   let maximumAmplitude = 0;
   let accumulatedPhaseTravel = 0;
+  let accumulatedMicroPhaseTravel = 0;
+  let accumulatedOpportunity = 0;
+  let opportunitySamples = 0;
   let previousPhase = 0;
+  let previousMicroPhase = 0;
 
   for (let frame = 0; frame < 300; frame += 1) {
     bones.LeftArm.quaternion.copy(angleAroundX(Math.sin(frame * 0.052) * 0.92));
@@ -334,10 +571,22 @@ function measureCircularResponse(value) {
         entry.curvePhase - previousPhase,
         Math.PI * 2
       );
+      accumulatedMicroPhaseTravel += THREE.MathUtils.euclideanModulo(
+        entry.curveMicroPhase - previousMicroPhase,
+        Math.PI * 2
+      );
+      accumulatedOpportunity += entry.curveOpportunity;
+      opportunitySamples += 1;
     }
     previousPhase = entry.curvePhase;
+    previousMicroPhase = entry.curveMicroPhase;
   }
-  return { maximumAmplitude, accumulatedPhaseTravel };
+  return {
+    maximumAmplitude,
+    accumulatedPhaseTravel,
+    accumulatedMicroPhaseTravel,
+    averageOpportunity: opportunitySamples ? accumulatedOpportunity / opportunitySamples : 0
+  };
 }
 
 function testCircularTravelHasPerceptuallyProgressiveStrength() {
@@ -358,8 +607,113 @@ function testCircularTravelHasPerceptuallyProgressiveStrength() {
     '200% should be clearly more circular than 150%'
   );
   assert.ok(
-    maximum.accumulatedPhaseTravel > subtle.accumulatedPhaseTravel * 1.25,
-    'Higher values should also complete circular travel faster'
+    maximum.accumulatedPhaseTravel > subtle.accumulatedPhaseTravel * 1.55,
+    'Higher values should complete substantially more primary circles'
+  );
+  assert.ok(
+    maximum.accumulatedMicroPhaseTravel > maximum.accumulatedPhaseTravel * 2.4,
+    'At 200%, a broad orbit should subdivide into multiple smaller circular loops'
+  );
+  assert.ok(
+    maximum.averageOpportunity > 0.42,
+    'A nearly single-axis source passage should become a usable circular opportunity'
+  );
+}
+
+function measureStraightenedAxisTurning(value) {
+  const { root, bones } = createRig();
+  const runtime = createNo60ModificationRuntime(root);
+  const values = createDefaultNo60ModificationValues();
+  values.curves.leftArm = value;
+  const previousOutput = new THREE.Quaternion();
+  const previousAxis = new THREE.Vector3();
+  const currentAxis = new THREE.Vector3();
+  const deltaQuaternion = new THREE.Quaternion();
+  let axisReady = false;
+  let accumulatedAxisTurn = 0;
+  let axisSamples = 0;
+  let accumulatedTravel = 0;
+
+  for (let frame = 0; frame < 420; frame += 1) {
+    const time = frame * 0.032;
+    const source = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      Math.sin(time) * 0.78,
+      Math.cos(time * 0.63) * 0.46,
+      Math.sin(time * 0.41 + 0.6) * 0.3,
+      'XYZ'
+    ));
+    bones.LeftArm.quaternion.copy(source);
+    applyNo60Modifications({ runtime, values, delta: 1 / 60 });
+
+    if (frame > 20) {
+      deltaQuaternion.copy(previousOutput).invert().multiply(bones.LeftArm.quaternion).normalize();
+      if (deltaQuaternion.w < 0) {
+        deltaQuaternion.set(
+          -deltaQuaternion.x,
+          -deltaQuaternion.y,
+          -deltaQuaternion.z,
+          -deltaQuaternion.w
+        );
+      }
+      const angle = 2 * Math.acos(THREE.MathUtils.clamp(deltaQuaternion.w, -1, 1));
+      const sine = Math.sqrt(Math.max(0, 1 - deltaQuaternion.w ** 2));
+      if (angle > 0.0001 && sine > 0.00001) {
+        currentAxis.set(
+          deltaQuaternion.x / sine,
+          deltaQuaternion.y / sine,
+          deltaQuaternion.z / sine
+        ).normalize();
+        if (axisReady) {
+          accumulatedAxisTurn += Math.acos(THREE.MathUtils.clamp(
+            Math.abs(previousAxis.dot(currentAxis)),
+            0,
+            1
+          ));
+          axisSamples += 1;
+        }
+        previousAxis.copy(currentAxis);
+        axisReady = true;
+        accumulatedTravel += angle;
+      }
+    }
+    previousOutput.copy(bones.LeftArm.quaternion);
+  }
+  return {
+    averageAxisTurn: axisSamples ? accumulatedAxisTurn / axisSamples : 0,
+    accumulatedTravel
+  };
+}
+
+function testLowerCircleValuesRemoveCurvatureWithoutCollapsingPoses() {
+  const linear = measureStraightenedAxisTurning(0);
+  const softened = measureStraightenedAxisTurning(50);
+  const source = measureStraightenedAxisTurning(100);
+  assert.ok(
+    linear.averageAxisTurn < source.averageAxisTurn * 0.68,
+    `0% should remove most changes in the source motion axis (${linear.averageAxisTurn} vs ${source.averageAxisTurn})`
+  );
+  assert.ok(
+    softened.averageAxisTurn > linear.averageAxisTurn
+      && softened.averageAxisTurn < source.averageAxisTurn,
+    `50% should retain an intermediate amount of source curvature (${linear.averageAxisTurn}, ${softened.averageAxisTurn}, ${source.averageAxisTurn})`
+  );
+  assert.ok(
+    linear.accumulatedTravel > source.accumulatedTravel * 0.35,
+    `Straightening should retain meaningful travel instead of freezing the limb (${linear.accumulatedTravel} vs ${source.accumulatedTravel})`
+  );
+
+  const { root, bones } = createRig();
+  const runtime = createNo60ModificationRuntime(root);
+  const values = createDefaultNo60ModificationValues();
+  values.curves.leftArm = 0;
+  const heldPose = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.72, 0.34, -0.18));
+  for (let frame = 0; frame < 45; frame += 1) {
+    bones.LeftArm.quaternion.copy(heldPose);
+    applyNo60Modifications({ runtime, values, delta: 1 / 60 });
+  }
+  assert.ok(
+    bones.LeftArm.quaternion.angleTo(heldPose) < 0.015,
+    'Removing curvature must keep held source poses intact'
   );
 }
 
@@ -567,18 +921,42 @@ function testExtendedSpaceHoldDuration() {
   let sourceAngle = 0;
 
   // Move decisively into an extended arm pose so the endpoint detector is armed.
-  for (let frame = 0; frame < 14; frame += 1) {
+  for (let frame = 0; frame < 60; frame += 1) {
     sourceAngle += 0.07;
     bones.LeftArm.quaternion.copy(angleAroundX(sourceAngle));
+    const sourcePose = bones.LeftArm.quaternion.clone();
     applyNo60Modifications({ runtime, values, delta });
+    assert.ok(
+      bones.LeftArm.quaternion.angleTo(sourcePose) < 0.000001,
+      'External space must not amplify joint rotations while detecting an endpoint'
+    );
   }
   // The first low-velocity frame at the extended pose should begin the stop.
   bones.LeftArm.quaternion.copy(angleAroundX(sourceAngle));
+  const endpointPose = bones.LeftArm.quaternion.clone();
   applyNo60Modifications({ runtime, values, delta });
+  assert.ok(
+    bones.LeftArm.quaternion.angleTo(endpointPose) < 0.000001,
+    'The stopped pose must remain exactly on the source choreography'
+  );
 
   const leftArm = runtime.entries.find((entry) => entry.name === 'LeftArm');
   const rightArm = runtime.entries.find((entry) => entry.name === 'RightArm');
-  assert.ok(leftArm.spaceHoldWeight > 0, 'Extended arm should ease into a held pose');
+  assert.ok(
+    leftArm.spaceHoldWeight > 0,
+    `Extended arm should activate a held pose (${JSON.stringify({
+      travel: runtime.spacePoseTravelSinceHold,
+      armed: runtime.spacePoseMotionArmed,
+      hold: runtime.spacePoseHoldRemaining,
+      cooldown: runtime.spacePoseHoldCooldown,
+      speed: leftArm.speed
+    })})`
+  );
+  assert.equal(
+    getNo60ExternalSpacePlaybackRate(runtime),
+    0.05,
+    'An active external-space highlight should slow the modified playback clock to 5%'
+  );
   assert.ok(
     leftArm.spaceHoldRemaining > 3.5,
     `External-space endpoint stop should use a long staged duration (${leftArm.spaceHoldRemaining})`
@@ -589,6 +967,10 @@ function testExtendedSpaceHoldDuration() {
     0.0001,
     'External-space stops should hold the affected pose as one synchronized shape'
   );
+  assert.ok(
+    leftArm.spaceHoldCooldown > 6.4,
+    `External-space stops should reserve a full recovery phrase (${leftArm.spaceHoldCooldown})`
+  );
 
   // A static endpoint must not repeatedly restart the hold after it finishes.
   for (let frame = 0; frame < 260; frame += 1) {
@@ -596,15 +978,57 @@ function testExtendedSpaceHoldDuration() {
     applyNo60Modifications({ runtime, values, delta });
   }
   assert.equal(leftArm.spaceHoldRemaining, 0);
+  assert.ok(
+    leftArm.spaceHoldCooldown > 2,
+    'The post-hold recovery window should remain active after the pose is released'
+  );
+  assert.equal(
+    getNo60ExternalSpacePlaybackRate(runtime),
+    1,
+    'Playback should return to full speed when the slow passage expires'
+  );
+
+  // Even a second extended endpoint cannot trigger while the recovery phrase
+  // is incomplete. This is the regression case for back-to-back stops.
+  for (let frame = 0; frame < 100; frame += 1) {
+    sourceAngle += 0.03;
+    bones.LeftArm.quaternion.copy(angleAroundX(sourceAngle));
+    applyNo60Modifications({ runtime, values, delta });
+  }
+  for (let frame = 0; frame < 10; frame += 1) {
+    bones.LeftArm.quaternion.copy(angleAroundX(sourceAngle));
+    applyNo60Modifications({ runtime, values, delta });
+  }
+  assert.equal(
+    leftArm.spaceHoldRemaining,
+    0,
+    'A nearby endpoint must not create a back-to-back external-space stop'
+  );
+
+  // Once the recovery and meaningful travel requirements are both satisfied,
+  // a later endpoint remains eligible for a new negative-space stop.
+  for (let frame = 0; frame < 90; frame += 1) {
+    sourceAngle += 0.03;
+    bones.LeftArm.quaternion.copy(angleAroundX(sourceAngle));
+    applyNo60Modifications({ runtime, values, delta });
+  }
+  bones.LeftArm.quaternion.copy(angleAroundX(sourceAngle));
+  applyNo60Modifications({ runtime, values, delta });
+  assert.ok(
+    leftArm.spaceHoldRemaining > 3.5,
+    'A later endpoint should remain eligible after a complete movement phrase'
+  );
 }
 
 testRegionTags();
 testRegionalResolver();
 testRegionalEnergyClocks();
 testDeterministicRegionalApplications();
+testAxisPointUsesTimedTwoBoneTouches();
 testCircularTravelSmoothsReversalsAndBoundaries();
 testCircularTravelPreservesSkeletonStructure();
 testCircularTravelHasPerceptuallyProgressiveStrength();
+testLowerCircleValuesRemoveCurvatureWithoutCollapsingPoses();
 testSynchronicScaleUsesSmoothLoopingPhaseOffsets();
 testShiftingRelationCrossfade();
 testShiftingRelationUsesDifferentialRates();

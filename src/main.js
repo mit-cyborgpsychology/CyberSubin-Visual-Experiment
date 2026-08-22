@@ -20,7 +20,14 @@ import {
   setFlowFieldOptions,
   updateFlowField
 } from './flow-field.js';
-import { createSmoothMixClip, MIX_UP_PARTS } from './mix-up.js';
+import {
+  applyMixUpGroupSource,
+  captureMixUpRestPose,
+  createSmoothMixClip,
+  MIX_UP_PARTS,
+  getMixUpSourceGroups,
+  retargetMixUpClip
+} from './mix-up.js';
 import { prepareStandaloneRigClip } from './standalone-rig-clips.js';
 import {
   PHYSICS_CONSTANT_DEFINITIONS,
@@ -46,6 +53,7 @@ import {
   createDefaultNo60ModificationValues,
   createNo60ModificationRuntime,
   getNo60EnergyPlaybackRate,
+  getNo60ExternalSpacePlaybackRate,
   getNo60RegionLabel,
   randomizeNo60ModificationValues,
   resolveNo60ModificationValue,
@@ -571,7 +579,7 @@ const STANDALONE_RIG_MOVEMENTS = Object.entries(STANDALONE_RIG_MODEL_URLS)
       source: 'glb-style-2',
       rigFamily: 'glb-style-2',
       sequenceCompatible: false,
-      mixUpCompatible: false,
+      mixUpCompatible: true,
       url
     };
   })
@@ -583,6 +591,14 @@ const MOVEMENTS = [...INDEXED_MOVEMENTS, ...EXTRA_MOVEMENTS, ...STANDALONE_RIG_M
 
 function isRigCompositionCompatible(movement) {
   return movement?.source === 'indexed';
+}
+
+function isMixUpCompatible(movement) {
+  return movement?.source === 'indexed' || movement?.source === 'glb-style-2';
+}
+
+function getMovementRigFamily(movement) {
+  return movement?.rigFamily ?? (movement?.source === 'indexed' ? 'indexed' : movement?.source);
 }
 
 function getSelectedMovement() {
@@ -618,6 +634,12 @@ function parseSequenceEntries(value) {
 
 function getSequenceMovement(entry) {
   return INDEXED_MOVEMENTS.find((movement) => movement.id === entry?.movementId) ?? null;
+}
+
+function getMixUpMovement(movementId) {
+  return MOVEMENTS.find((movement) => (
+    movement.id === String(movementId) && isMixUpCompatible(movement)
+  )) ?? null;
 }
 
 const TRACK_DEFINITIONS = [
@@ -896,6 +918,8 @@ const state = {
   root: null,
   modelContainer: null,
   modelMovementId: null,
+  modelRigFamily: null,
+  mixUpTargetRestPose: new Map(),
   mixer: null,
   action: null,
   clip: null,
@@ -1146,6 +1170,7 @@ const gltfLoader = new GLTFLoader();
 gltfLoader.setDRACOLoader(dracoLoader);
 gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const sequenceClipCache = new Map();
+const mixUpClipCache = new Map();
 
 const clock = new THREE.Clock();
 const tempVector = new THREE.Vector3();
@@ -1205,7 +1230,7 @@ function populateMovementSelector() {
   const modelFolderGroup = document.createElement('optgroup');
   modelFolderGroup.label = '/MODELS · FILE NAME INDEX';
   const standaloneRigGroup = document.createElement('optgroup');
-  standaloneRigGroup.label = '/GLB-STYLE-2 · STANDALONE RIGS · NO SEQUENCE / MIX-UP';
+  standaloneRigGroup.label = '/GLB-STYLE-2 · RETARGETABLE MIX-UP SOURCES · NO SEQUENCE';
 
   INDEXED_MOVEMENTS.forEach((movement) => {
     const option = document.createElement('option');
@@ -1224,7 +1249,7 @@ function populateMovementSelector() {
   STANDALONE_RIG_MOVEMENTS.forEach((movement) => {
     const option = document.createElement('option');
     option.value = movement.id;
-    option.textContent = `${movement.fileName} · STANDALONE RIG`;
+    option.textContent = `${movement.fileName} · STANDALONE RIG · MIX-UP READY`;
     standaloneRigGroup.append(option);
   });
 
@@ -1336,6 +1361,8 @@ function clearCurrentModel() {
   state.root = null;
   state.modelContainer = null;
   state.modelMovementId = null;
+  state.modelRigFamily = null;
+  state.mixUpTargetRestPose = new Map();
   state.mixer = null;
   state.action = null;
   state.clip = null;
@@ -1593,6 +1620,7 @@ function setSequenceTimelineOpen(open) {
 function updateAddToSequenceAvailability() {
   const movement = MOVEMENTS.find((candidate) => candidate.id === ui.select.value);
   const rigCompositionCompatible = isRigCompositionCompatible(movement);
+  const mixUpCompatible = isMixUpCompatible(movement);
   const available = rigCompositionCompatible && state.sequence.length < MAX_SEQUENCE_LENGTH;
   ui.addToSequence.disabled = !available;
   ui.addToSequence.title = available
@@ -1604,10 +1632,10 @@ function updateAddToSequenceAvailability() {
   ui.sequenceTimelineToggle.title = rigCompositionCompatible
     ? 'Show or hide the editable movement sequence'
     : 'Standalone glb-style-2 rigs cannot use the sequence timeline';
-  ui.mixUpToggle.disabled = !rigCompositionCompatible;
-  ui.mixUpToggle.title = rigCompositionCompatible
-    ? 'Show or hide Mix-up controls'
-    : 'Standalone glb-style-2 rigs cannot use Mix-up';
+  ui.mixUpToggle.disabled = !mixUpCompatible;
+  ui.mixUpToggle.title = mixUpCompatible
+    ? 'Show or hide Mix-up controls; GLB Style 2 motion is safely retargeted'
+    : 'This model does not expose a compatible humanoid rig for Mix-up';
 }
 
 function renderSequenceTimeline() {
@@ -1777,6 +1805,46 @@ function loadSequenceClipData(entry) {
   });
 
   sequenceClipCache.set(movement.id, request);
+  return request;
+}
+
+function loadMixUpClipData(movementId) {
+  const movement = getMixUpMovement(movementId);
+  if (!movement) return Promise.reject(new Error('Mix-Up movement is unavailable.'));
+  if (mixUpClipCache.has(movement.id)) return mixUpClipCache.get(movement.id);
+
+  const request = new Promise((resolve, reject) => {
+    gltfLoader.load(
+      movement.url,
+      (gltf) => {
+        try {
+          const sourceRestPose = captureMixUpRestPose(gltf.scene);
+          const sourceClip = chooseClip(
+            gltf.animations,
+            movement.modelNumber,
+            movement.source,
+            movement.fileName
+          );
+          if (!sourceClip) throw new Error(`Movement ${movement.id} has no animation clip.`);
+          const clip = sourceClip.clone();
+          clip.name = `mix-up-source-${movement.id}`;
+          const clipStart = getTrimmedClipStart(clip);
+          resolve({ movement, clip, clipStart, sourceRestPose });
+        } catch (error) {
+          reject(error);
+        } finally {
+          disposeObject(gltf.scene);
+        }
+      },
+      undefined,
+      reject
+    );
+  }).catch((error) => {
+    mixUpClipCache.delete(movement.id);
+    throw error;
+  });
+
+  mixUpClipCache.set(movement.id, request);
   return request;
 }
 
@@ -2098,10 +2166,8 @@ function createCompleteIndexedSequence() {
   renderSequenceTimeline();
 }
 
-function getCurrentIndexedMovementId() {
-  return INDEXED_MOVEMENTS.some((movement) => movement.id === ui.select.value)
-    ? ui.select.value
-    : DEFAULT_MOVEMENT_ID;
+function getCurrentMixUpMovementId() {
+  return getMixUpMovement(ui.select.value)?.id ?? DEFAULT_MOVEMENT_ID;
 }
 
 function getRandomIndexedMovementIds(count) {
@@ -2116,7 +2182,7 @@ function getRandomIndexedMovementIds(count) {
 function configureMixUpSources(sources, mode = 'manual') {
   for (const part of MIX_UP_PARTS) {
     const movementId = String(sources?.[part.id] ?? '');
-    if (INDEXED_MOVEMENTS.some((movement) => movement.id === movementId)) {
+    if (getMixUpMovement(movementId)) {
       state.mixUpSources[part.id] = movementId;
     }
   }
@@ -2126,26 +2192,32 @@ function configureMixUpSources(sources, mode = 'manual') {
 }
 
 function renderMixUpPanel() {
-  const rigCompositionCompatible = isRigCompositionCompatible(getSelectedMovement());
+  const mixUpCompatible = isMixUpCompatible(getSelectedMovement());
+  const usesRetargeting = state.modelRigFamily !== 'indexed'
+    || MIX_UP_PARTS.some((part) => getMovementRigFamily(getMixUpMovement(state.mixUpSources[part.id])) !== 'indexed');
   ui.mixUpToggle.setAttribute('aria-expanded', String(state.mixUpPanelOpen));
   ui.mixUpToggleStatus.textContent = state.mixUpPanelOpen
     ? 'HIDE'
     : state.mixUpActive
       ? 'LIVE'
       : 'SHOW';
-  ui.mixUpPlay.disabled = state.mixUpPreparing || !state.ready || !rigCompositionCompatible;
+  ui.mixUpPlay.disabled = state.mixUpPreparing || !state.ready || !mixUpCompatible;
   ui.mixUpPlay.textContent = state.mixUpPreparing
     ? 'PREPARING…'
     : state.mixUpActive
       ? 'STOP MIX'
       : 'PLAY MIX';
 
-  if (!rigCompositionCompatible) {
-    ui.mixUpStatus.textContent = 'STANDALONE RIG · MIX-UP UNAVAILABLE';
+  if (!mixUpCompatible) {
+    ui.mixUpStatus.textContent = 'THIS RIG CANNOT BE USED IN MIX-UP';
   } else if (state.mixUpPreparing) {
-    ui.mixUpStatus.textContent = 'LOADING 5 MOVEMENT LAYERS…';
+    ui.mixUpStatus.textContent = usesRetargeting
+      ? 'LOADING 5 MOVEMENT LAYERS · RETARGETING COMPATIBLE JOINTS…'
+      : 'LOADING 5 MOVEMENT LAYERS…';
   } else if (state.mixUpActive && state.mixUpReady) {
-    ui.mixUpStatus.textContent = 'LIVE · 5 INDEPENDENT BODY-REGION LOOPS · SMOOTH LOOP CLOSURE';
+    ui.mixUpStatus.textContent = usesRetargeting
+      ? 'LIVE · RIG-RETARGETED ROTATION · TARGET BODY STRUCTURE PRESERVED'
+      : 'LIVE · 5 INDEPENDENT BODY-REGION LOOPS · SMOOTH LOOP CLOSURE';
   } else if (state.mixUpConfigured) {
     const modeLabels = {
       topBottom: 'TOP / BOTTOM RANDOM MIX READY',
@@ -2153,42 +2225,69 @@ function renderMixUpPanel() {
       frankenstein: 'FRANKENSTEIN RANDOM MIX READY',
       manual: 'CUSTOM BODY-REGION MIX READY'
     };
-    ui.mixUpStatus.textContent = modeLabels[state.mixUpMode] ?? modeLabels.manual;
+    ui.mixUpStatus.textContent = `${modeLabels[state.mixUpMode] ?? modeLabels.manual}${usesRetargeting ? ' · STYLE 2 READY' : ''}`;
   } else {
-    ui.mixUpStatus.textContent = 'READY · COMBINE MOVEMENT SOURCES BY BODY REGION';
+    ui.mixUpStatus.textContent = 'READY · MIX 1–59 + GLB STYLE 2 BY BODY REGION';
   }
 
   ui.mixUpMethodButtons.forEach((button) => {
     button.classList.toggle('active', button.dataset.mixUpMethod === state.mixUpMode);
   });
 
-  const movementOptions = INDEXED_MOVEMENTS.map((movement) => (
+  const indexedMovementOptions = INDEXED_MOVEMENTS.map((movement) => (
     `<option value="${movement.id}">${String(movement.modelNumber).padStart(2, '0')} · ${escapeSequenceMarkup(movement.english.trim())}</option>`
   )).join('');
+  const standaloneMovementOptions = STANDALONE_RIG_MOVEMENTS.map((movement) => (
+    `<option value="${escapeSequenceMarkup(movement.id)}">S2 · ${escapeSequenceMarkup(movement.fileName)} · RETARGETED</option>`
+  )).join('');
+  const movementOptions = `
+    <optgroup label="59 INDEXED MOVEMENTS">${indexedMovementOptions}</optgroup>
+    <optgroup label="GLB STYLE 2 · RETARGETED">${standaloneMovementOptions}</optgroup>`;
 
-  ui.mixUpSourceGrid.innerHTML = MIX_UP_PARTS.map((part) => {
-    const movementId = state.mixUpSources[part.id];
-    const movement = INDEXED_MOVEMENTS.find((candidate) => candidate.id === movementId);
+  const renderSourceCard = ({ id, label, description, movementId, grouped = false }) => {
+    const movement = getMixUpMovement(movementId);
+    const movementCode = movement?.source === 'indexed'
+      ? String(movement.modelNumber).padStart(2, '0')
+      : movement
+        ? 'S2'
+        : '—';
     return `
       <label class="mix-up-source-card${state.mixUpActive ? ' active' : ''}">
-        <span>${escapeSequenceMarkup(part.label)}</span>
-        <strong>${movement ? String(movement.modelNumber).padStart(2, '0') : '—'}</strong>
-        <small>${escapeSequenceMarkup(part.description)}</small>
-        <select data-mix-up-source="${part.id}" aria-label="Movement source for ${escapeSequenceMarkup(part.label)}">
+        <span>${escapeSequenceMarkup(label)}</span>
+        <strong>${movementCode}</strong>
+        <small>${escapeSequenceMarkup(description)}</small>
+        <select ${grouped ? 'data-mix-up-group-source' : 'data-mix-up-source'}="${id}" aria-label="Movement source for ${escapeSequenceMarkup(label)}">
           ${movementOptions.replace(`value="${movementId}"`, `value="${movementId}" selected`)}
         </select>
       </label>`;
-  }).join('');
+  };
+
+  const sourceGroups = getMixUpSourceGroups(state.mixUpMode);
+  ui.mixUpSourceGrid.classList.toggle('mix-up-source-grid--grouped', sourceGroups.length > 0);
+  if (sourceGroups.length) {
+    ui.mixUpSourceGrid.innerHTML = sourceGroups.map((group) => renderSourceCard({
+      ...group,
+      movementId: state.mixUpSources[group.sourcePartId],
+      grouped: true
+    })).join('') + (state.mixUpMode === 'leftRight'
+      ? '<p class="mix-up-source-note">BODY + HEAD CONTINUE FROM THE SELECTED AVATAR MOVEMENT.</p>'
+      : '');
+  } else {
+    ui.mixUpSourceGrid.innerHTML = MIX_UP_PARTS.map((part) => renderSourceCard({
+      ...part,
+      movementId: state.mixUpSources[part.id]
+    })).join('');
+  }
 }
 
 function setMixUpPanelOpen(open) {
   const nextOpen = Boolean(open)
     && !EMBEDDED_VIEW
-    && isRigCompositionCompatible(getSelectedMovement());
+    && isMixUpCompatible(getSelectedMovement());
   if (nextOpen) setNo60ElementAnalysisOpen(false);
   if (nextOpen && state.sequenceTimelineOpen) setSequenceTimelineOpen(false);
   if (nextOpen && !state.mixUpConfigured) {
-    const movementId = getCurrentIndexedMovementId();
+    const movementId = getCurrentMixUpMovementId();
     configureMixUpSources(Object.fromEntries(MIX_UP_PARTS.map((part) => [part.id, movementId])));
   }
   state.mixUpPanelOpen = nextOpen;
@@ -2196,10 +2295,6 @@ function setMixUpPanelOpen(open) {
   document.body.classList.toggle('mix-up-panel-open', nextOpen);
   renderMixUpPanel();
   applyAvatarScreenOffset();
-}
-
-function createMixUpSourceEntry(movementId) {
-  return { movementId };
 }
 
 function releaseMixUpActions() {
@@ -2230,15 +2325,22 @@ async function initializeMixUpPlayback() {
   try {
     const sources = await Promise.all(MIX_UP_PARTS.map(async (part) => ({
       part,
-      source: await loadSequenceClipData(createMixUpSourceEntry(state.mixUpSources[part.id]))
+      source: await loadMixUpClipData(state.mixUpSources[part.id])
     })));
     if (token !== state.mixUpLoadToken || !state.mixUpActive || !state.mixer) return;
 
     releaseMixUpActions();
     state.mixer.stopAllAction();
     state.mixUpActions = sources.map(({ part, source }) => {
-      const clip = createSmoothMixClip({
+      const retargetedClip = retargetMixUpClip({
         sourceClip: source.clip,
+        sourceRestPose: source.sourceRestPose,
+        targetRestPose: state.mixUpTargetRestPose,
+        sourceRigFamily: getMovementRigFamily(source.movement),
+        targetRigFamily: state.modelRigFamily
+      });
+      const clip = createSmoothMixClip({
+        sourceClip: retargetedClip,
         clipStart: source.clipStart,
         partId: part.id,
         name: `mix-up-${part.id}-${source.movement.id}-${token}`,
@@ -2291,7 +2393,7 @@ async function initializeMixUpPlayback() {
 }
 
 function startMixUp() {
-  if (!state.ready || !isRigCompositionCompatible(getSelectedMovement())) return;
+  if (!state.ready || !isMixUpCompatible(getSelectedMovement())) return;
   if (state.sequenceActive) stopSequence({ reloadModel: false });
   setSequenceTimelineOpen(false);
   state.mixUpActive = true;
@@ -2322,7 +2424,7 @@ function stopMixUp({ reloadModel = true } = {}) {
 function resetMixUp() {
   const wasActive = state.mixUpActive;
   if (wasActive) stopMixUp();
-  const movementId = getCurrentIndexedMovementId();
+  const movementId = getCurrentMixUpMovementId();
   configureMixUpSources(Object.fromEntries(MIX_UP_PARTS.map((part) => [part.id, movementId])));
   state.mixUpMode = 'manual';
   renderMixUpPanel();
@@ -2330,9 +2432,29 @@ function resetMixUp() {
 
 function setMixUpSource(partId, movementId) {
   if (!MIX_UP_PARTS.some((part) => part.id === partId)) return;
-  if (!INDEXED_MOVEMENTS.some((movement) => movement.id === movementId)) return;
+  if (!getMixUpMovement(movementId)) return;
   state.mixUpSources[partId] = movementId;
   state.mixUpMode = 'manual';
+  state.mixUpConfigured = true;
+  renderMixUpPanel();
+  if (state.mixUpActive) {
+    state.mixUpResumePlaying = state.playing;
+    state.mixUpLoadToken += 1;
+    state.mixUpPreparing = false;
+    void initializeMixUpPlayback();
+  }
+}
+
+function setMixUpGroupSource(groupId, movementId) {
+  if (!getMixUpMovement(movementId)) return;
+  const nextSources = applyMixUpGroupSource(
+    state.mixUpSources,
+    state.mixUpMode,
+    groupId,
+    movementId
+  );
+  if (Object.entries(nextSources).every(([partId, sourceId]) => state.mixUpSources[partId] === sourceId)) return;
+  state.mixUpSources = nextSources;
   state.mixUpConfigured = true;
   renderMixUpPanel();
   if (state.mixUpActive) {
@@ -2348,7 +2470,7 @@ function randomizeMixUp(method) {
   let sources;
   if (method === 'topBottom') {
     sources = {
-      body: movementIds[0],
+      body: movementIds[1],
       leftHand: movementIds[0],
       rightHand: movementIds[0],
       leftFoot: movementIds[1],
@@ -2356,7 +2478,7 @@ function randomizeMixUp(method) {
     };
   } else if (method === 'leftRight') {
     sources = {
-      body: movementIds[2],
+      body: getCurrentMixUpMovementId(),
       leftHand: movementIds[0],
       rightHand: movementIds[1],
       leftFoot: movementIds[0],
@@ -6574,6 +6696,7 @@ function prepareModel(gltf, movement) {
   clearCurrentModel();
   const root = gltf.scene;
   styleModel(root);
+  const mixUpTargetRestPose = captureMixUpRestPose(root);
 
   const clip = chooseClip(
     gltf.animations,
@@ -6600,6 +6723,8 @@ function prepareModel(gltf, movement) {
   state.root = root;
   state.modelContainer = modelContainer;
   state.modelMovementId = movement.id;
+  state.modelRigFamily = getMovementRigFamily(movement);
+  state.mixUpTargetRestPose = mixUpTargetRestPose;
   state.mixer = mixer;
   state.action = action;
   state.clip = clip;
@@ -6673,8 +6798,10 @@ function loadModel(movementIndex) {
   ui.select.value = movement.id;
   if (!isRigCompositionCompatible(movement)) {
     if (state.sequenceActive) stopSequence({ reloadModel: false });
-    if (state.mixUpActive) stopMixUp({ reloadModel: false });
     setSequenceTimelineOpen(false);
+  }
+  if (!isMixUpCompatible(movement)) {
+    if (state.mixUpActive) stopMixUp({ reloadModel: false });
     setMixUpPanelOpen(false);
   }
   updateAddToSequenceAvailability();
@@ -7509,7 +7636,12 @@ function animate() {
     const energyPlaybackRate = state.no60ModificationMode
       ? getNo60EnergyPlaybackRate(state.no60ModificationValues)
       : 1;
-    const modifiedFrameDelta = baseFrameDelta * energyPlaybackRate;
+    const externalSpacePlaybackRate = state.no60ModificationMode
+      ? getNo60ExternalSpacePlaybackRate(state.no60ModificationRuntime)
+      : 1;
+    const modifiedFrameDelta = baseFrameDelta
+      * energyPlaybackRate
+      * externalSpacePlaybackRate;
     let looped = false;
     if (state.mixUpActive && state.mixUpReady) {
       const previousElapsed = state.mixUpElapsed;
@@ -7539,7 +7671,9 @@ function animate() {
     }
     if (state.no60ModificationMode) {
       advanceNo60OriginalReference(baseFrameDelta);
-      refreshNo60ModifiedPose(baseFrameDelta, { advanceEnergy: true });
+      refreshNo60ModifiedPose(baseFrameDelta, {
+        advanceEnergy: externalSpacePlaybackRate > 0
+      });
     }
     centerCharacter();
     if (looped && !(state.sequenceActive && state.sequenceReady) && !state.mixUpActive) {
@@ -7627,6 +7761,11 @@ ui.mixUpMethodButtons.forEach((button) => {
   button.addEventListener('click', () => randomizeMixUp(button.dataset.mixUpMethod));
 });
 ui.mixUpSourceGrid.addEventListener('change', (event) => {
+  const groupedSelect = event.target.closest('[data-mix-up-group-source]');
+  if (groupedSelect) {
+    setMixUpGroupSource(groupedSelect.dataset.mixUpGroupSource, groupedSelect.value);
+    return;
+  }
   const select = event.target.closest('[data-mix-up-source]');
   if (!select) return;
   setMixUpSource(select.dataset.mixUpSource, select.value);

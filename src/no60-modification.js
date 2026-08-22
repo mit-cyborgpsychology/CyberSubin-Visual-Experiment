@@ -40,9 +40,9 @@ export const NO60_MODIFICATION_DEFINITIONS = Object.freeze([
     masterMax: 200,
     regions: ['whole', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'],
     meaning: 'Changes how straight, rounded, and continuous limb trajectories feel.',
-    visual: 'Lower values straighten the motion. Higher values guide the shoulder and hip roots through smooth bounded circular orbits, making hand and foot paths rounder without twisting the torso or stacking rotations down a limb.',
-    technical: 'Below 100%, animated quaternions blend toward a stable reference. Above 100%, the source rotation axis is filtered into an orthogonal orbit frame. A bounded phase oscillator adds smooth circular travel only at the four limb roots; every child joint keeps its source local rotation, and positions, scales, and bone lengths are never changed.',
-    boundary: '0% is maximally linear and 100% preserves the source. Above 100%, a perceptual response curve makes the change visible immediately, then progressively increases circular phase speed and radius toward 200% while the maximum added joint angle remains bounded.'
+    visual: 'Lower values progressively straighten curved limb travel while preserving the source poses. Higher values analyze each moving limb for under-curved or linear passages, then add more bounded circular opportunities. At the highest values, broad arcs divide into smaller secondary loops and straight passages gain new circular travel.',
+    technical: 'Below 100%, a stable filtered motion axis replaces rapid direction changes with straighter quaternion segments. Above 100%, source speed, axis coherence, and turning are combined into a smoothed opportunity score. A primary orbit and faster bounded secondary orbit are added only at the four limb roots; child joints keep their source local rotation, and positions, scales, and bone lengths are never changed.',
+    boundary: '0% removes the most source curvature, 100% preserves the choreography, and 200% creates the most circular opportunities and subdivisions while keeping the maximum added joint angle bounded.'
   },
   {
     id: 'axes',
@@ -54,10 +54,10 @@ export const NO60_MODIFICATION_DEFINITIONS = Object.freeze([
     masterMin: 0,
     masterMax: 200,
     regions: ['whole', 'arms', 'legs'],
-    meaning: 'Introduces magnetic attraction around joint axes, emphasizing balance, pivots, and held rotational alignments.',
-    visual: 'A moving joint rotates smoothly toward a nearby axis node, settles into a temporary hold, and releases when the next major source movement begins. Other body points may move toward the head node, while the head keeps its original animation.',
-    technical: 'Detects nearby axis-node pairs, rotates the controlling parent joint toward the target with quaternion interpolation, and temporarily overrides that joint until accumulated source rotation identifies the next major movement. Head and neck joints are target-only and never receive an axis rotation override.',
-    boundary: '0% softens rotational pivots, 100% preserves the source, and 200% creates the widest attraction range and strongest held alignment without a discontinuous jump.'
+    meaning: 'Changes how often the hands and feet intentionally reach toward changing axis points on the body.',
+    visual: 'Above 100%, hands blend slowly out of the choreography, remain in contact with changing landmarks on the outside of the body, and blend slowly back. The repeating phrase uses five hand-touch movements for every one foot-touch movement. Most hand gestures use one hand and some use both hands together. The percentage changes the average frequency of touches, not how fast an individual touch moves. Individual gestures now vary organically from 2.8 to 4.8 choreography seconds, including different slow approach, sustained contact, and release proportions. Even at 200%, the next gesture has an organically varied gap with occasional longer breaths, so the rhythm does not feel metronomic. Real-time timing continues to follow playback speed.',
+    technical: 'Schedules a deterministic 5:1 ratio of hand-touch to foot-touch events using single- and double-hand gestures. Each gesture receives a repeatable pseudo-random duration from 2.8 to 4.8 choreography seconds plus independently varied approach and contact-hold proportions. The approach occupies 30–38% and the sustained hold occupies 38–46%, leaving a smooth release. A separate organic gap multiplier and periodic breath accent vary the time before each new gesture while preserving the percentage-controlled average cadence. If the hand required by the next event is still moving, the scheduler waits instead of substituting a foot event. Independent free limbs may overlap. Each gesture is solved with bounded two-bone inverse kinematics at the shoulder–elbow or hip–knee chain. Each landmark is expanded into an anatomical exterior envelope, including clearance for the hand or foot, so the effector approaches the visible surface instead of the bone center. Only local joint rotations change: bone positions, scales, lengths, fingers, the torso, and the underlying choreography remain intact.',
+    boundary: '0–100% preserves the source choreography exactly. From 101–200%, only average contact frequency increases progressively; touch speed and duration remain organically varied within the same slow range at every percentage. At 200%, gaps vary around the fastest cadence without stretching or collapsing the body.'
   },
   {
     id: 'sync',
@@ -84,10 +84,10 @@ export const NO60_MODIFICATION_DEFINITIONS = Object.freeze([
     masterMin: 0,
     masterMax: 200,
     regions: ['whole', 'arms', 'legs'],
-    meaning: 'Emphasizes the negative space around the body by making spatial endpoints more deliberate.',
-    visual: 'Selected regions pause more frequently and for longer at extended low-velocity endpoints. The external-space field simultaneously becomes denser, larger, and brighter.',
-    technical: 'Uses an intensity-dependent motion gate, extension threshold, hold duration, and point-cloud emphasis so higher values reveal more stable negative-space shapes.',
-    boundary: '0% compresses the spatial reach and softens the field, 100% preserves the source and baseline field, and 200% creates the most frequent extended-pose stops with the strongest negative-space articulation.'
+    meaning: 'Emphasizes the negative space around the body by slowing intact source poses without freezing them.',
+    visual: 'Selected regions trigger increasingly frequent and long 5%-speed passages at important extended low-velocity endpoints. After every slow passage, meaningful movement must unfold before another pose can be selected, preventing back-to-back highlights. The choreography continues as one coherent silhouette while the external-space field becomes denser, larger, and brighter.',
+    technical: 'Uses an intensity-dependent endpoint detector, a post-highlight recovery window, and accumulated joint travel to reduce the modified playback clock to 5%. Higher values shorten the required recovery phrase while retaining a strict minimum gap. It never changes joint rotations, positions, scales, or bone lengths, so every emphasized pose remains exactly on the source choreography.',
+    boundary: '0–100% adds no pose deformation or slow-motion highlights. Above 100%, highlighted passages become more frequent and longer; 200% creates the strongest negative-space articulation while preserving the source body structure.'
   },
   {
     id: 'relations',
@@ -199,6 +199,10 @@ export function getNo60EnergyPlaybackRate(values) {
   );
 }
 
+export function getNo60ExternalSpacePlaybackRate(runtime) {
+  return (runtime?.spacePoseHoldRemaining ?? 0) > 0 ? 0.05 : 1;
+}
+
 function cleanBoneName(name = '') {
   return name.split(':').at(-1).replace(/[^a-z0-9]/gi, '').toLowerCase();
 }
@@ -261,33 +265,6 @@ function isCurveMotionRoot(name) {
 
 function isFingerBone(name) {
   return /thumb|finger|index|middle|ring|pinky|little|digit|metacarp/.test(cleanBoneName(name));
-}
-
-function isHeadChainBone(name) {
-  return /head|neck/.test(cleanBoneName(name));
-}
-
-const AXIS_POINT_BONES = new Set([
-  'hips', 'spine2', 'head',
-  'leftarm', 'leftforearm', 'lefthand',
-  'rightarm', 'rightforearm', 'righthand',
-  'leftleg', 'leftfoot', 'rightleg', 'rightfoot'
-]);
-
-function axisPointGroup(entry) {
-  if (entry.tags.has('leftArm')) return 'leftArm';
-  if (entry.tags.has('rightArm')) return 'rightArm';
-  if (entry.tags.has('leftLeg')) return 'leftLeg';
-  if (entry.tags.has('rightLeg')) return 'rightLeg';
-  return cleanBoneName(entry.name) === 'head' ? 'head' : 'center';
-}
-
-function axisMoverPriority(entry) {
-  const bone = cleanBoneName(entry.name);
-  if (/hand|foot/.test(bone)) return 1;
-  if (/forearm|arm|leg/.test(bone)) return 0.72;
-  if (bone === 'head') return 0.34;
-  return 0.12;
 }
 
 function primaryMotionRegion(tags) {
@@ -359,32 +336,25 @@ export function createNo60ModificationRuntime(root, clip = null, clipStart = 0) 
       curveSecondaryAxis: new THREE.Vector3(1, 0, 0),
       curveAxisReady: false,
       curveActivation: 0,
+      curveOpportunity: 0,
+      curveSourceCurvature: 0,
       curveAmount: 0,
       curveAngularVelocity: 0,
       curvePhase: 0,
+      curveMicroPhase: 0,
+      curveSubdivision: 1,
       curveOrbitAmplitude: 0,
       curveRotation: new THREE.Quaternion(),
+      curveLinearAxis: new THREE.Vector3(1, 0, 0),
+      curveLinearAxisReady: false,
+      curveLinearizedQuaternion: object.quaternion.clone(),
+      curveLinearReady: false,
       curveMotionRoot: isCurveMotionRoot(object.name),
       regionRoot: isRegionRoot(object.name),
       effectEligible: !isFingerBone(object.name),
       bodyEligible: !isFingerBone(object.name),
-      axisRotationEligible: !isFingerBone(object.name) && !isHeadChainBone(object.name),
       pairedEntry: null,
-      parentEntry: null,
-      axisPoint: AXIS_POINT_BONES.has(cleanBoneName(object.name)),
-      axisPointGroup: null,
-      axisWorldPosition: new THREE.Vector3(),
-      axisLockPoint: null,
-      axisTargetEntry: null,
-      axisLockActive: false,
-      axisLockReleasing: false,
-      axisLockAge: 0,
-      axisSourceTravel: 0,
-      axisCooldown: 0,
-      axisStrength: 0,
-      axisSourceAtLock: object.quaternion.clone(),
-      axisTargetQuaternion: object.quaternion.clone(),
-      axisOverrideQuaternion: object.quaternion.clone()
+      axisTouchAdjusted: false
     });
   });
   const entriesByName = new Map(entries.map((entry) => [cleanBoneName(entry.name), entry]));
@@ -396,10 +366,6 @@ export function createNo60ModificationRuntime(root, clip = null, clipStart = 0) 
         ? name.replace('right', 'left')
         : null;
     entry.pairedEntry = pairedName ? entriesByName.get(pairedName) ?? null : null;
-    entry.parentEntry = entry.bone.parent?.isBone
-      ? entriesByName.get(cleanBoneName(entry.bone.parent.name)) ?? null
-      : null;
-    entry.axisPointGroup = axisPointGroup(entry);
   }
   if (clip?.tracks?.length) {
     for (const track of clip.tracks) {
@@ -432,7 +398,25 @@ export function createNo60ModificationRuntime(root, clip = null, clipStart = 0) 
     spacePoseHoldCooldown: 0,
     spacePoseHoldWeight: 0,
     spacePoseExtensionPeak: 0,
-    spacePoseCapturePending: false
+    spacePoseCapturePending: false,
+    spacePoseTravelSinceHold: 0,
+    axisTouchEvent: null,
+    axisTouchEvents: [],
+    axisNextTouchAt: 0.2,
+    axisTouchGapCursor: 0,
+    axisTouchPatternCursor: 0,
+    axisTouchCount: 0,
+    axisTouchStartTimes: [],
+    axisTouchHistory: [],
+    axisTouchWeight: 0,
+    axisTouchLastDistance: null,
+    axisTouchLastSourceDistance: null,
+    axisTouchMinimumDistanceRatio: 1,
+    axisTouchLastSurfaceRadius: null,
+    axisTouchMinimumSurfaceClearance: Infinity,
+    axisTouchTransitionDuration: 3.8,
+    axisTouchTransitionVariation: 1,
+    axisTouchMaximumConcurrent: 0
   };
 }
 
@@ -442,14 +426,34 @@ const scratchQuaternion = new THREE.Quaternion();
 const scratchQuaternionB = new THREE.Quaternion();
 const scratchAxis = new THREE.Vector3();
 const scratchCurveSecondaryAxis = new THREE.Vector3();
-const axisControllerPosition = new THREE.Vector3();
-const axisCurrentDirection = new THREE.Vector3();
-const axisTargetDirection = new THREE.Vector3();
-const axisControllerWorldQuaternion = new THREE.Quaternion();
-const axisParentWorldQuaternion = new THREE.Quaternion();
-const axisWorldCorrection = new THREE.Quaternion();
-const axisDesiredWorldQuaternion = new THREE.Quaternion();
-const axisDesiredLocalQuaternion = new THREE.Quaternion();
+const axisTouchRootPosition = new THREE.Vector3();
+const axisTouchMidPosition = new THREE.Vector3();
+const axisTouchEndPosition = new THREE.Vector3();
+const axisTouchTargetPosition = new THREE.Vector3();
+const axisTouchHipsPosition = new THREE.Vector3();
+const axisTouchHeadPosition = new THREE.Vector3();
+const axisTouchBodyUp = new THREE.Vector3();
+const axisTouchContactPosition = new THREE.Vector3();
+const axisTouchContactNormal = new THREE.Vector3();
+const axisTouchDesiredEnd = new THREE.Vector3();
+const axisTouchTargetDirection = new THREE.Vector3();
+const axisTouchFirstDirection = new THREE.Vector3();
+const axisTouchSecondDirection = new THREE.Vector3();
+const axisTouchDesiredFirstDirection = new THREE.Vector3();
+const axisTouchDesiredSecondDirection = new THREE.Vector3();
+const axisTouchBendDirection = new THREE.Vector3();
+const axisTouchFallbackDirection = new THREE.Vector3();
+const axisTouchWorldUp = new THREE.Vector3(0, 1, 0);
+const axisTouchCurrentWorldQuaternion = new THREE.Quaternion();
+const axisTouchParentWorldQuaternion = new THREE.Quaternion();
+const axisTouchWorldCorrection = new THREE.Quaternion();
+const axisTouchLimitedCorrection = new THREE.Quaternion();
+const axisTouchDesiredWorldQuaternion = new THREE.Quaternion();
+const axisTouchDesiredLocalQuaternion = new THREE.Quaternion();
+const axisTouchUpperSourceQuaternion = new THREE.Quaternion();
+const axisTouchLowerSourceQuaternion = new THREE.Quaternion();
+const axisTouchUpperSolvedQuaternion = new THREE.Quaternion();
+const axisTouchLowerSolvedQuaternion = new THREE.Quaternion();
 
 function wrapNo60ClipTime(runtime, time) {
   const clipStart = runtime.clipStart ?? 0;
@@ -511,184 +515,467 @@ function applyRegionalEnergy({
   bone.quaternion.copy(source).slerp(entry.energyQuaternion, entry.energyBlend).normalize();
 }
 
-function releaseAxisLock(entry, cooldown = 0.24) {
-  entry.axisLockActive = false;
-  entry.axisLockReleasing = true;
-  entry.axisLockAge = 0;
-  entry.axisSourceTravel = 0;
-  entry.axisCooldown = Math.max(entry.axisCooldown, cooldown);
-  entry.axisLockPoint = null;
-  entry.axisTargetEntry = null;
+function axisEntryByNames(runtime, names) {
+  for (const name of names) {
+    const entry = runtime.entries.find((candidate) => cleanBoneName(candidate.name) === name);
+    if (entry) return entry;
+  }
+  return null;
 }
 
-function createAxisLock(point, target, strength) {
-  const controller = point.parentEntry;
-  if (
-    !controller?.effectEligible
-    || !controller.axisRotationEligible
-    || isHeadChainBone(point.name)
-  ) return false;
+const AXIS_TOUCH_LIMBS = Object.freeze([
+  Object.freeze({
+    key: 'leftArm',
+    upper: Object.freeze(['leftarm']),
+    lower: Object.freeze(['leftforearm']),
+    effector: Object.freeze(['lefthand']),
+    upperLimit: 1.25,
+    lowerLimit: 1.45
+  }),
+  Object.freeze({
+    key: 'rightArm',
+    upper: Object.freeze(['rightarm']),
+    lower: Object.freeze(['rightforearm']),
+    effector: Object.freeze(['righthand']),
+    upperLimit: 1.25,
+    lowerLimit: 1.45
+  }),
+  Object.freeze({
+    key: 'leftLeg',
+    upper: Object.freeze(['leftupleg', 'leftthigh']),
+    lower: Object.freeze(['leftleg', 'leftshin']),
+    effector: Object.freeze(['leftfoot', 'lefttoe']),
+    upperLimit: 0.95,
+    lowerLimit: 1.2
+  }),
+  Object.freeze({
+    key: 'rightLeg',
+    upper: Object.freeze(['rightupleg', 'rightthigh']),
+    lower: Object.freeze(['rightleg', 'rightshin']),
+    effector: Object.freeze(['rightfoot', 'righttoe']),
+    upperLimit: 0.95,
+    lowerLimit: 1.2
+  })
+]);
 
-  controller.bone.getWorldPosition(axisControllerPosition);
-  axisCurrentDirection.copy(point.axisWorldPosition).sub(axisControllerPosition);
-  axisTargetDirection.copy(target.axisWorldPosition).sub(axisControllerPosition);
-  if (axisCurrentDirection.lengthSq() < 0.000001 || axisTargetDirection.lengthSq() < 0.000001) {
-    return false;
-  }
-  axisCurrentDirection.normalize();
-  axisTargetDirection.normalize();
+// Twelve gestures repeat as a stable phrase: ten hand-touch events and two
+// foot-touch events create the requested 5:1 frequency ratio. Two of the hand
+// events use both hands together. Busy hands hold the phrase at its current
+// step rather than allowing a foot event to replace the intended hand touch.
+const AXIS_TOUCH_GESTURE_PATTERN = Object.freeze([
+  Object.freeze([{ limb: 'leftArm', target: Object.freeze(['head']) }]),
+  Object.freeze([{ limb: 'rightArm', target: Object.freeze(['leftupleg', 'leftthigh', 'leftleg']) }]),
+  Object.freeze([{ limb: 'leftArm', target: Object.freeze(['rightupleg', 'rightthigh', 'rightleg']) }]),
+  Object.freeze([{ limb: 'rightArm', target: Object.freeze(['head']) }]),
+  Object.freeze([
+    { limb: 'leftArm', target: Object.freeze(['head']) },
+    { limb: 'rightArm', target: Object.freeze(['head']) }
+  ]),
+  Object.freeze([{ limb: 'leftLeg', target: Object.freeze(['rightleg', 'rightshin']) }]),
+  Object.freeze([{ limb: 'rightArm', target: Object.freeze(['head']) }]),
+  Object.freeze([{ limb: 'leftArm', target: Object.freeze(['rightupleg', 'rightthigh', 'rightleg']) }]),
+  Object.freeze([{ limb: 'rightArm', target: Object.freeze(['spine2', 'spine1', 'spine']) }]),
+  Object.freeze([{ limb: 'leftArm', target: Object.freeze(['head']) }]),
+  Object.freeze([
+    { limb: 'leftArm', target: Object.freeze(['rightupleg', 'rightthigh', 'rightleg']) },
+    { limb: 'rightArm', target: Object.freeze(['leftupleg', 'leftthigh', 'leftleg']) }
+  ]),
+  Object.freeze([{ limb: 'rightLeg', target: Object.freeze(['leftleg', 'leftshin']) }])
+]);
 
-  controller.bone.getWorldQuaternion(axisControllerWorldQuaternion);
-  if (controller.bone.parent) {
-    controller.bone.parent.getWorldQuaternion(axisParentWorldQuaternion);
-  } else {
-    axisParentWorldQuaternion.identity();
+function resolveAxisTouchLimb(runtime, definition) {
+  const upper = axisEntryByNames(runtime, definition.upper);
+  const lower = axisEntryByNames(runtime, definition.lower);
+  const effector = axisEntryByNames(runtime, definition.effector);
+  if (!upper?.effectEligible || !lower?.effectEligible || !effector) return null;
+  return { definition, upper, lower, effector };
+}
+
+function axisTouchStrength(values, definition, limb) {
+  const value = resolveApplicableValue(values, definition, limb.effector.tags);
+  return THREE.MathUtils.clamp((value - definition.neutral) / 100, 0, 1);
+}
+
+function axisTouchCadence(strength) {
+  return THREE.MathUtils.lerp(8, 0.5, Math.pow(strength, 0.72));
+}
+
+function axisTouchOrganicGap(strength, gapIndex) {
+  const baseline = axisTouchCadence(strength);
+  const noise = axisTouchOrganicNoise(gapIndex, 0);
+  const organicScale = THREE.MathUtils.lerp(0.72, 1.28, noise);
+  const breathAccent = gapIndex % 5 === 4
+    ? 0.22
+    : gapIndex % 7 === 6
+      ? 0.12
+      : 0;
+  return baseline * (organicScale + breathAccent);
+}
+
+function axisTouchOrganicNoise(index, channel) {
+  const noiseSeed = Math.sin((index + 1) * 12.9898 + channel * 78.233) * 43758.5453;
+  return noiseSeed - Math.floor(noiseSeed);
+}
+
+function axisTouchOrganicTiming(runtime, eventIndex) {
+  const variation = runtime.axisTouchTransitionVariation;
+  const duration = runtime.axisTouchTransitionDuration + THREE.MathUtils.lerp(
+    -variation,
+    variation,
+    axisTouchOrganicNoise(eventIndex, 1)
+  );
+  const approachEnd = THREE.MathUtils.lerp(
+    0.3,
+    0.38,
+    axisTouchOrganicNoise(eventIndex, 2)
+  );
+  const holdShare = THREE.MathUtils.lerp(
+    0.38,
+    0.46,
+    axisTouchOrganicNoise(eventIndex, 3)
+  );
+  return {
+    duration,
+    approachEnd,
+    holdEnd: approachEnd + holdShare
+  };
+}
+
+function axisTouchEnvelope(elapsed, duration, approachEnd, holdEnd) {
+  const progress = THREE.MathUtils.clamp(elapsed / Math.max(0.001, duration), 0, 1);
+  if (progress < approachEnd) {
+    return THREE.MathUtils.smoothstep(progress / approachEnd, 0, 1);
   }
-  axisWorldCorrection.setFromUnitVectors(axisCurrentDirection, axisTargetDirection);
-  axisDesiredWorldQuaternion.copy(axisWorldCorrection)
-    .multiply(axisControllerWorldQuaternion)
+  if (progress <= holdEnd) return 1;
+  return 1 - THREE.MathUtils.smoothstep(
+    (progress - holdEnd) / Math.max(0.001, 1 - holdEnd),
+    0,
+    1
+  );
+}
+
+function applyAxisTouchWorldSwing(bone, fromDirection, toDirection, maximumAngle) {
+  if (fromDirection.lengthSq() < 0.000001 || toDirection.lengthSq() < 0.000001) return 0;
+  fromDirection.normalize();
+  toDirection.normalize();
+  const angle = fromDirection.angleTo(toDirection);
+  if (!Number.isFinite(angle) || angle < 0.000001) return 0;
+
+  axisTouchWorldCorrection.setFromUnitVectors(fromDirection, toDirection);
+  if (angle > maximumAngle) {
+    axisTouchLimitedCorrection.identity().slerp(
+      axisTouchWorldCorrection,
+      maximumAngle / angle
+    );
+    axisTouchWorldCorrection.copy(axisTouchLimitedCorrection);
+  }
+  bone.getWorldQuaternion(axisTouchCurrentWorldQuaternion);
+  if (bone.parent) bone.parent.getWorldQuaternion(axisTouchParentWorldQuaternion);
+  else axisTouchParentWorldQuaternion.identity();
+  axisTouchDesiredWorldQuaternion.copy(axisTouchWorldCorrection)
+    .multiply(axisTouchCurrentWorldQuaternion)
     .normalize();
-  axisDesiredLocalQuaternion.copy(axisParentWorldQuaternion)
+  axisTouchDesiredLocalQuaternion.copy(axisTouchParentWorldQuaternion)
     .invert()
-    .multiply(axisDesiredWorldQuaternion)
+    .multiply(axisTouchDesiredWorldQuaternion)
+    .normalize();
+  bone.quaternion.copy(axisTouchDesiredLocalQuaternion);
+  return Math.min(angle, maximumAngle);
+}
+
+function axisTouchSurfaceRadius(targetName, effectorName, bodyScale) {
+  let targetRadius = 0.08;
+  if (/head/.test(targetName)) targetRadius = 0.12;
+  else if (/hips|pelvis/.test(targetName)) targetRadius = 0.17;
+  else if (/spine|chest/.test(targetName)) targetRadius = 0.16;
+  else if (/upleg|thigh/.test(targetName)) targetRadius = 0.105;
+  else if (/leg|shin/.test(targetName)) targetRadius = 0.075;
+  else if (/foot|toe/.test(targetName)) targetRadius = 0.06;
+  else if (/shoulder|arm/.test(targetName)) targetRadius = 0.07;
+  else if (/forearm/.test(targetName)) targetRadius = 0.055;
+  else if (/hand/.test(targetName)) targetRadius = 0.045;
+
+  // Hand/foot bones sit near the wrist/ankle rather than at the visible tip.
+  // This extra clearance keeps the complete mesh outside the target surface.
+  const effectorClearance = /hand/.test(effectorName) ? 0.055 : 0.065;
+  return bodyScale * (targetRadius + effectorClearance + 0.012);
+}
+
+function positionAxisTouchSurfaceCenter(runtime, target, bodyScale) {
+  target.bone.getWorldPosition(axisTouchTargetPosition);
+  if (/head/.test(cleanBoneName(target.name))) {
+    // Head bones commonly originate close to the neck. Raise the proxy toward
+    // the skull center so a hand never gets pulled through the neck mesh.
+    axisTouchTargetPosition.addScaledVector(axisTouchBodyUp, bodyScale * 0.06);
+  }
+}
+
+function solveAxisTouchTwoBone(runtime, event, weight) {
+  const { upper, lower, effector, target, definition } = event;
+  axisTouchUpperSourceQuaternion.copy(upper.bone.quaternion);
+  axisTouchLowerSourceQuaternion.copy(lower.bone.quaternion);
+  runtime.root?.updateMatrixWorld(true);
+  upper.bone.getWorldPosition(axisTouchRootPosition);
+  lower.bone.getWorldPosition(axisTouchMidPosition);
+  effector.bone.getWorldPosition(axisTouchEndPosition);
+
+  const firstLength = axisTouchRootPosition.distanceTo(axisTouchMidPosition);
+  const secondLength = axisTouchMidPosition.distanceTo(axisTouchEndPosition);
+  if (firstLength < 0.0001 || secondLength < 0.0001) return false;
+
+  const hips = axisEntryByNames(runtime, ['hips', 'pelvis']);
+  const head = axisEntryByNames(runtime, ['head']);
+  let bodyScale = firstLength + secondLength;
+  if (hips && head) {
+    hips.bone.getWorldPosition(axisTouchHipsPosition);
+    head.bone.getWorldPosition(axisTouchHeadPosition);
+    axisTouchBodyUp.copy(axisTouchHeadPosition).sub(axisTouchHipsPosition);
+    bodyScale = Math.max(bodyScale, axisTouchBodyUp.length());
+    if (axisTouchBodyUp.lengthSq() > 0.000001) axisTouchBodyUp.normalize();
+    else axisTouchBodyUp.set(0, 1, 0);
+  } else {
+    axisTouchBodyUp.set(0, 1, 0);
+  }
+
+  positionAxisTouchSurfaceCenter(runtime, target, bodyScale);
+
+  axisTouchContactNormal.copy(axisTouchEndPosition).sub(axisTouchTargetPosition);
+  if (axisTouchContactNormal.lengthSq() < 0.000001) {
+    axisTouchContactNormal.copy(axisTouchRootPosition).sub(axisTouchTargetPosition);
+  }
+  if (axisTouchContactNormal.lengthSq() < 0.000001) axisTouchContactNormal.set(1, 0, 0);
+  axisTouchContactNormal.normalize();
+  const targetName = cleanBoneName(target.name);
+  const effectorName = cleanBoneName(effector.name);
+  const contactGap = axisTouchSurfaceRadius(targetName, effectorName, bodyScale);
+  axisTouchContactPosition.copy(axisTouchTargetPosition)
+    .addScaledVector(axisTouchContactNormal, contactGap);
+  axisTouchDesiredEnd.copy(axisTouchContactPosition);
+
+  axisTouchTargetDirection.copy(axisTouchDesiredEnd).sub(axisTouchRootPosition);
+  const rawDistance = axisTouchTargetDirection.length();
+  if (rawDistance < 0.000001) return false;
+  axisTouchTargetDirection.multiplyScalar(1 / rawDistance);
+  const minimumReach = Math.abs(firstLength - secondLength) + 0.0001;
+  const maximumReach = firstLength + secondLength - 0.0001;
+  const reachDistance = THREE.MathUtils.clamp(rawDistance, minimumReach, maximumReach);
+
+  axisTouchBendDirection.copy(axisTouchMidPosition).sub(axisTouchRootPosition);
+  axisTouchBendDirection.addScaledVector(
+    axisTouchTargetDirection,
+    -axisTouchBendDirection.dot(axisTouchTargetDirection)
+  );
+  if (axisTouchBendDirection.lengthSq() < 0.000001) {
+    axisTouchBendDirection.copy(axisTouchWorldUp).addScaledVector(
+      axisTouchTargetDirection,
+      -axisTouchWorldUp.dot(axisTouchTargetDirection)
+    );
+  }
+  if (axisTouchBendDirection.lengthSq() < 0.000001) {
+    axisTouchBendDirection.set(1, 0, 0).addScaledVector(
+      axisTouchTargetDirection,
+      -axisTouchTargetDirection.x
+    );
+  }
+  axisTouchBendDirection.normalize();
+
+  const along = (
+    reachDistance * reachDistance + firstLength * firstLength - secondLength * secondLength
+  ) / (2 * reachDistance);
+  const bendHeight = Math.sqrt(Math.max(0, firstLength * firstLength - along * along));
+  axisTouchContactPosition.copy(axisTouchRootPosition)
+    .addScaledVector(axisTouchTargetDirection, along)
+    .addScaledVector(axisTouchBendDirection, bendHeight);
+  axisTouchDesiredEnd.copy(axisTouchRootPosition)
+    .addScaledVector(axisTouchTargetDirection, reachDistance);
+
+  axisTouchFirstDirection.copy(axisTouchMidPosition).sub(axisTouchRootPosition);
+  axisTouchDesiredFirstDirection.copy(axisTouchContactPosition).sub(axisTouchRootPosition);
+  applyAxisTouchWorldSwing(
+    upper.bone,
+    axisTouchFirstDirection,
+    axisTouchDesiredFirstDirection,
+    definition.upperLimit
+  );
+
+  runtime.root?.updateMatrixWorld(true);
+  lower.bone.getWorldPosition(axisTouchMidPosition);
+  effector.bone.getWorldPosition(axisTouchEndPosition);
+  axisTouchSecondDirection.copy(axisTouchEndPosition).sub(axisTouchMidPosition);
+  axisTouchDesiredSecondDirection.copy(axisTouchDesiredEnd).sub(axisTouchMidPosition);
+  applyAxisTouchWorldSwing(
+    lower.bone,
+    axisTouchSecondDirection,
+    axisTouchDesiredSecondDirection,
+    definition.lowerLimit
+  );
+
+  // Solve the complete contact pose, then blend both joints from the live
+  // choreography by the gesture envelope. This guarantees an exact return to
+  // the source pose and avoids an elbow or knee branch flip near full extension.
+  axisTouchUpperSolvedQuaternion.copy(upper.bone.quaternion);
+  axisTouchLowerSolvedQuaternion.copy(lower.bone.quaternion);
+  upper.bone.quaternion.copy(axisTouchUpperSourceQuaternion)
+    .slerp(axisTouchUpperSolvedQuaternion, weight)
+    .normalize();
+  lower.bone.quaternion.copy(axisTouchLowerSourceQuaternion)
+    .slerp(axisTouchLowerSolvedQuaternion, weight)
     .normalize();
 
-  const attractionWeight = THREE.MathUtils.lerp(0.34, 1, strength);
-  controller.axisTargetQuaternion.copy(controller.source)
-    .slerp(axisDesiredLocalQuaternion, attractionWeight)
-    .normalize();
-  controller.axisOverrideQuaternion.copy(controller.bone.quaternion);
-  controller.axisSourceAtLock.copy(controller.source);
-  controller.axisLockPoint = point;
-  controller.axisTargetEntry = target;
-  controller.axisLockActive = true;
-  controller.axisLockReleasing = false;
-  controller.axisLockAge = 0;
-  controller.axisSourceTravel = 0;
-  controller.axisStrength = strength;
+  runtime.root?.updateMatrixWorld(true);
+  effector.bone.getWorldPosition(axisTouchEndPosition);
+  positionAxisTouchSurfaceCenter(runtime, target, bodyScale);
+  const sourceDistance = event.sourceDistance > 0.0001
+    ? event.sourceDistance
+    : axisTouchEndPosition.distanceTo(axisTouchTargetPosition);
+  const distance = axisTouchEndPosition.distanceTo(axisTouchTargetPosition);
+  runtime.axisTouchLastSourceDistance = sourceDistance;
+  runtime.axisTouchLastDistance = distance;
+  runtime.axisTouchLastSurfaceRadius = contactGap;
+  runtime.axisTouchMinimumSurfaceClearance = Math.min(
+    runtime.axisTouchMinimumSurfaceClearance,
+    distance - contactGap
+  );
+  runtime.axisTouchMinimumDistanceRatio = Math.min(
+    runtime.axisTouchMinimumDistanceRatio,
+    distance / Math.max(0.0001, sourceDistance)
+  );
+  upper.axisTouchAdjusted = true;
+  lower.axisTouchAdjusted = true;
   return true;
 }
 
-function prepareAxisPointAttractions(runtime, values, definition, delta) {
-  const frameDelta = Math.max(1 / 240, delta);
-  const axisPoints = runtime.entries.filter(
-    (entry) => entry.axisPoint && entry.effectEligible && entry.parentEntry?.effectEligible
+function beginAxisTouchGesture(runtime, values, definition, availableLimbs, startTime) {
+  const limbsByKey = new Map(availableLimbs.map((limb) => [limb.definition.key, limb]));
+  const busyLimbs = new Set(
+    runtime.axisTouchEvents
+      .filter((event) => startTime - event.startTime < event.duration)
+      .flatMap((event) => event.actions.map((action) => action.definition.key))
   );
+  for (let offset = 0; offset < AXIS_TOUCH_GESTURE_PATTERN.length; offset += 1) {
+    const patternIndex = (runtime.axisTouchPatternCursor + offset)
+      % AXIS_TOUCH_GESTURE_PATTERN.length;
+    const instructions = AXIS_TOUCH_GESTURE_PATTERN[patternIndex];
+    const plannedLimbs = instructions
+      .map((instruction) => limbsByKey.get(instruction.limb))
+      .filter(Boolean);
+    if (plannedLimbs.some((limb) => busyLimbs.has(limb.definition.key))) return false;
 
-  for (const entry of runtime.entries) {
-    entry.axisCooldown = Math.max(0, entry.axisCooldown - frameDelta);
-    if (!entry.axisLockActive) continue;
-    const pointValue = entry.axisLockPoint
-      ? resolveApplicableValue(values, definition, entry.axisLockPoint.tags)
-      : definition.neutral;
-    const currentStrength = THREE.MathUtils.clamp((pointValue - 100) / 100, 0, 1);
-    entry.axisLockAge += frameDelta;
-    entry.axisSourceTravel += entry.sourceDeltaAngle;
-
-    const majorMovementTravel = THREE.MathUtils.lerp(0.42, 0.68, entry.axisStrength);
-    const sourceDiscontinuity = entry.sourceDeltaAngle > 1.25;
-    const nextMajorMovement = entry.axisLockAge > 0.2
-      && entry.axisSourceTravel > majorMovementTravel
-      && entry.speed > 0.38;
-    if (currentStrength <= 0.001 || sourceDiscontinuity || nextMajorMovement) {
-      releaseAxisLock(entry, sourceDiscontinuity ? 0.34 : 0.24);
-    }
-  }
-
-  if (!axisPoints.length) return;
-  runtime.root?.updateMatrixWorld(true);
-  axisPoints.forEach((entry) => entry.bone.getWorldPosition(entry.axisWorldPosition));
-
-  const pairs = [];
-  for (let firstIndex = 0; firstIndex < axisPoints.length; firstIndex += 1) {
-    const first = axisPoints[firstIndex];
-    const firstValue = resolveApplicableValue(values, definition, first.tags);
-    const firstStrength = THREE.MathUtils.clamp((firstValue - 100) / 100, 0, 1);
-    for (let secondIndex = firstIndex + 1; secondIndex < axisPoints.length; secondIndex += 1) {
-      const second = axisPoints[secondIndex];
-      if (first.axisPointGroup === second.axisPointGroup) continue;
-      if (
-        first.parentEntry === second
-        || second.parentEntry === first
-        || first.parentEntry === second.parentEntry
-      ) continue;
-      const secondValue = resolveApplicableValue(values, definition, second.tags);
-      const secondStrength = THREE.MathUtils.clamp((secondValue - 100) / 100, 0, 1);
-      const strongest = Math.max(firstStrength, secondStrength);
-      if (strongest <= 0.001) continue;
-      const distance = first.axisWorldPosition.distanceTo(second.axisWorldPosition);
-      const attractionDistance = THREE.MathUtils.lerp(0.18, 0.38, strongest);
-      if (distance > 0.035 && distance < attractionDistance) {
-        pairs.push({ first, second, firstStrength, secondStrength, distance });
+    const actions = instructions.flatMap((instruction) => {
+      const limb = limbsByKey.get(instruction.limb);
+      if (!limb) return [];
+      const strength = axisTouchStrength(values, definition, limb);
+      if (strength <= 0.001) return [];
+      const target = axisEntryByNames(runtime, instruction.target);
+      if (!target || target === limb.upper || target === limb.lower || target === limb.effector) {
+        return [];
       }
-    }
-  }
-  pairs.sort((first, second) => first.distance - second.distance);
+      runtime.root?.updateMatrixWorld(true);
+      limb.effector.bone.getWorldPosition(axisTouchEndPosition);
+      target.bone.getWorldPosition(axisTouchTargetPosition);
+      return [{
+        ...limb,
+        target,
+        strength,
+        sourceDistance: axisTouchEndPosition.distanceTo(axisTouchTargetPosition)
+      }];
+    });
+    if (actions.length !== instructions.length) continue;
 
-  const reservedControllers = new Set();
-  for (const pair of pairs) {
-    const firstController = pair.first.parentEntry;
-    const secondController = pair.second.parentEntry;
-    const firstAvailable = pair.firstStrength > 0.001
-      && pair.first.axisRotationEligible
-      && firstController.axisRotationEligible
-      && !isHeadChainBone(pair.first.name)
-      && !firstController.axisLockActive
-      && !firstController.axisLockReleasing
-      && firstController.axisCooldown <= 0
-      && !reservedControllers.has(firstController);
-    const secondAvailable = pair.secondStrength > 0.001
-      && pair.second.axisRotationEligible
-      && secondController.axisRotationEligible
-      && !isHeadChainBone(pair.second.name)
-      && !secondController.axisLockActive
-      && !secondController.axisLockReleasing
-      && secondController.axisCooldown <= 0
-      && !reservedControllers.has(secondController);
-    if (!firstAvailable && !secondAvailable) continue;
-
-    let point;
-    let target;
-    let strength;
-    const firstMotionScore = firstController.speed * (0.65 + pair.firstStrength * 0.35)
-      + axisMoverPriority(pair.first) * 0.02;
-    const secondMotionScore = secondController.speed * (0.65 + pair.secondStrength * 0.35)
-      + axisMoverPriority(pair.second) * 0.02;
-    if (!secondAvailable || (
-      firstAvailable
-      && firstMotionScore >= secondMotionScore
-    )) {
-      point = pair.first;
-      target = pair.second;
-      strength = pair.firstStrength;
-    } else {
-      point = pair.second;
-      target = pair.first;
-      strength = pair.secondStrength;
-    }
-    if (createAxisLock(point, target, strength)) {
-      reservedControllers.add(point.parentEntry);
-      reservedControllers.add(target.parentEntry);
-    }
+    const strength = Math.max(...actions.map((action) => action.strength));
+    const timing = axisTouchOrganicTiming(runtime, runtime.axisTouchCount);
+    const { duration, approachEnd, holdEnd } = timing;
+    const event = {
+      actions,
+      startTime,
+      duration,
+      approachEnd,
+      holdEnd,
+      strength
+    };
+    runtime.axisTouchEvents.push(event);
+    runtime.axisTouchEvent = event;
+    runtime.axisTouchCount += 1;
+    runtime.axisTouchStartTimes.push(startTime);
+    if (runtime.axisTouchStartTimes.length > 48) runtime.axisTouchStartTimes.shift();
+    runtime.axisTouchHistory.push({
+      time: startTime,
+      limb: actions[0].definition.key,
+      target: cleanBoneName(actions[0].target.name),
+      limbs: actions.map((action) => action.definition.key),
+      targets: actions.map((action) => cleanBoneName(action.target.name)),
+      strength,
+      duration,
+      approachDuration: duration * approachEnd,
+      holdDuration: duration * (holdEnd - approachEnd),
+      releaseDuration: duration * (1 - holdEnd)
+    });
+    if (runtime.axisTouchHistory.length > 48) runtime.axisTouchHistory.shift();
+    runtime.axisTouchPatternCursor = (patternIndex + 1) % AXIS_TOUCH_GESTURE_PATTERN.length;
+    return true;
   }
+  return false;
 }
 
-function applyAxisPointOverride(entry, bone, delta) {
-  if (entry.axisLockActive) {
-    const response = THREE.MathUtils.lerp(3.4, 6.5, entry.axisStrength);
-    const alpha = 1 - Math.exp(-Math.max(1 / 240, delta) * response);
-    entry.axisOverrideQuaternion.slerp(entry.axisTargetQuaternion, alpha).normalize();
-    bone.quaternion.copy(entry.axisOverrideQuaternion);
+function applyAxisTouchGestures(runtime, values, definition) {
+  for (const entry of runtime.entries) entry.axisTouchAdjusted = false;
+  const availableLimbs = AXIS_TOUCH_LIMBS
+    .map((limbDefinition) => resolveAxisTouchLimb(runtime, limbDefinition))
+    .filter(Boolean);
+  const strongest = availableLimbs.reduce(
+    (value, limb) => Math.max(value, axisTouchStrength(values, definition, limb)),
+    0
+  );
+  if (strongest <= 0.001) {
+    runtime.axisTouchEvent = null;
+    runtime.axisTouchEvents = [];
+    runtime.axisTouchWeight = 0;
+    runtime.axisNextTouchAt = runtime.elapsed + 0.35;
+    runtime.axisTouchGapCursor = 0;
     return;
   }
-  if (!entry.axisLockReleasing) return;
-  const releaseAlpha = 1 - Math.exp(-Math.max(1 / 240, delta) * 8.5);
-  entry.axisOverrideQuaternion.slerp(bone.quaternion, releaseAlpha).normalize();
-  const remainingOverride = entry.axisOverrideQuaternion.angleTo(bone.quaternion);
-  bone.quaternion.copy(entry.axisOverrideQuaternion);
-  if (remainingOverride < 0.012) {
-    entry.axisLockReleasing = false;
-    entry.axisStrength = 0;
+
+  runtime.axisTouchEvents = runtime.axisTouchEvents.filter(
+    (event) => runtime.elapsed - event.startTime < event.duration
+  );
+  let scheduleGuard = 0;
+  while (runtime.elapsed >= runtime.axisNextTouchAt && scheduleGuard < 8) {
+    const scheduledAt = runtime.axisNextTouchAt;
+    const didBegin = beginAxisTouchGesture(
+      runtime,
+      values,
+      definition,
+      availableLimbs,
+      scheduledAt
+    );
+    const scheduledStrength = didBegin
+      ? runtime.axisTouchEvents.at(-1)?.strength ?? strongest
+      : strongest;
+    runtime.axisNextTouchAt = scheduledAt + axisTouchOrganicGap(
+      scheduledStrength,
+      runtime.axisTouchGapCursor
+    );
+    runtime.axisTouchGapCursor += 1;
+    scheduleGuard += 1;
+  }
+  runtime.axisTouchEvent = runtime.axisTouchEvents.at(-1) ?? null;
+  runtime.axisTouchMaximumConcurrent = Math.max(
+    runtime.axisTouchMaximumConcurrent,
+    runtime.axisTouchEvents.length
+  );
+  runtime.axisTouchWeight = 0;
+  for (const event of runtime.axisTouchEvents) {
+    const eventElapsed = runtime.elapsed - event.startTime;
+    const weight = axisTouchEnvelope(
+      eventElapsed,
+      event.duration,
+      event.approachEnd,
+      event.holdEnd
+    );
+    runtime.axisTouchWeight = Math.max(runtime.axisTouchWeight, weight);
+    for (const action of event.actions) {
+      if (weight > 0.0001) solveAxisTouchTwoBone(runtime, action, weight);
+    }
   }
 }
 
@@ -734,6 +1021,7 @@ function prepareExternalSpacePoseStops(runtime, values, definition, delta) {
     runtime.spacePoseHoldRemaining = 0;
     runtime.spacePoseHoldCooldown = 0;
     runtime.spacePoseExtensionPeak = 0;
+    runtime.spacePoseTravelSinceHold = 0;
     const releaseAlpha = 1 - Math.exp(-safeDelta * 1.1);
     runtime.spacePoseHoldWeight = THREE.MathUtils.lerp(
       runtime.spacePoseHoldWeight ?? 0,
@@ -772,7 +1060,19 @@ function prepareExternalSpacePoseStops(runtime, values, definition, delta) {
   // instead of a continuously drifting silhouette.
   const motionArmThreshold = THREE.MathUtils.lerp(0.34, 0.16, intensity);
   const slowThreshold = THREE.MathUtils.lerp(0.14, 0.42, intensity);
-  if (runtime.spacePoseHoldRemaining <= 0 && poseSpeed > motionArmThreshold) {
+  if (runtime.spacePoseHoldRemaining <= 0 && poseSpeed > slowThreshold * 0.35) {
+    runtime.spacePoseTravelSinceHold = Math.min(
+      12,
+      (runtime.spacePoseTravelSinceHold ?? 0) + poseSpeed * safeDelta
+    );
+  }
+  const requiredPhraseTravel = THREE.MathUtils.lerp(1.35, 0.85, intensity);
+  if (
+    runtime.spacePoseHoldRemaining <= 0
+    && runtime.spacePoseHoldCooldown <= 0
+    && runtime.spacePoseTravelSinceHold >= requiredPhraseTravel
+    && poseSpeed > motionArmThreshold
+  ) {
     runtime.spacePoseMotionArmed = true;
   }
 
@@ -788,10 +1088,15 @@ function prepareExternalSpacePoseStops(runtime, values, definition, delta) {
     && extendedEndpoint
   ) {
     runtime.spacePoseHoldRemaining = THREE.MathUtils.lerp(1.35, 3.8, intensity);
+    // A stop must be followed by a substantial passage of uninterrupted
+    // choreography. The cooldown includes the hold itself, and the separate
+    // travel requirement prevents a tiny gesture from qualifying as a phrase.
+    const postHoldRecovery = THREE.MathUtils.lerp(5.2, 2.8, intensity);
     runtime.spacePoseHoldCooldown = runtime.spacePoseHoldRemaining
-      + THREE.MathUtils.lerp(0.48, 0.12, intensity);
+      + postHoldRecovery;
     runtime.spacePoseCapturePending = true;
     runtime.spacePoseMotionArmed = false;
+    runtime.spacePoseTravelSinceHold = 0;
   }
 
   runtime.spacePoseHoldRemaining = Math.max(
@@ -801,8 +1106,8 @@ function prepareExternalSpacePoseStops(runtime, values, definition, delta) {
   const holdTarget = runtime.spacePoseHoldRemaining > 0
     ? THREE.MathUtils.clamp(0.92 + intensity * 0.078, 0, 0.998)
     : 0;
-  // Ease deliberately into and out of each still pose. The long release makes
-  // the next pose arrive as a slow transition rather than a sudden catch-up.
+  // Retain a smoothed status weight for visualization and diagnostics. The
+  // actual stop is applied to the playback clock, never to a bone rotation.
   const response = holdTarget > (runtime.spacePoseHoldWeight ?? 0) ? 4.2 : 0.9;
   const holdAlpha = 1 - Math.exp(-safeDelta * response);
   runtime.spacePoseHoldWeight = THREE.MathUtils.lerp(
@@ -913,11 +1218,55 @@ function applyCircularTravel(entry, bone, curveSigned, delta) {
     }
   }
 
+  const curveAmountAlpha = 1 - Math.exp(-smoothingDelta * 3.8);
+  entry.curveAmount = THREE.MathUtils.lerp(entry.curveAmount, curveSigned, curveAmountAlpha);
+  // Make the first increase above 100% perceptible, then reserve enough of the
+  // upper range for visibly more loops rather than only a larger radius.
+  const perceptualCurveStrength = Math.pow(
+    THREE.MathUtils.clamp(entry.curveAmount, 0, 1),
+    0.55
+  );
+
+  const sourceCurvatureTarget = validDelta
+    ? THREE.MathUtils.clamp((1 - axisAlignment) / 0.72, 0, 1)
+    : 0;
+  entry.curveSourceCurvature = THREE.MathUtils.lerp(
+    entry.curveSourceCurvature,
+    sourceCurvatureTarget,
+    1 - Math.exp(-smoothingDelta * 4.4)
+  );
+
+  // Increasing the control lowers the motion threshold. This lets the system
+  // discover circular opportunities in quieter and more linear passages where
+  // the source choreography did not already contain an obvious circle.
+  const opportunityFloor = THREE.MathUtils.lerp(0.024, 0.0035, perceptualCurveStrength);
+  const opportunityRange = THREE.MathUtils.lerp(0.26, 0.09, perceptualCurveStrength);
   const motionAmount = validDelta
-    ? THREE.MathUtils.clamp((entry.speed - 0.02) / 0.28, 0, 1)
+    ? THREE.MathUtils.clamp((entry.speed - opportunityFloor) / opportunityRange, 0, 1)
     : 0;
   const coherence = THREE.MathUtils.clamp((axisAlignment - 0.05) / 0.95, 0, 1);
-  const activationTarget = motionAmount * THREE.MathUtils.lerp(0.32, 1, coherence);
+  const existingCurveOpportunity = motionAmount * THREE.MathUtils.lerp(
+    0.72,
+    0.88,
+    entry.curveSourceCurvature
+  );
+  const inventedCircleOpportunity = motionAmount
+    * coherence
+    * THREE.MathUtils.lerp(0.16, 1, perceptualCurveStrength);
+  const opportunityTarget = Math.max(
+    existingCurveOpportunity,
+    inventedCircleOpportunity
+  );
+  const opportunityResponse = opportunityTarget > entry.curveOpportunity ? 5.4 : 1.25;
+  entry.curveOpportunity = startingCurve
+    ? opportunityTarget * 0.1
+    : THREE.MathUtils.lerp(
+      entry.curveOpportunity,
+      opportunityTarget,
+      1 - Math.exp(-smoothingDelta * opportunityResponse)
+    );
+
+  const activationTarget = entry.curveOpportunity;
   const activationResponse = activationTarget > entry.curveActivation ? 4.6 : 1.8;
   entry.curveActivation = startingCurve
     ? activationTarget * 0.12
@@ -927,19 +1276,17 @@ function applyCircularTravel(entry, bone, curveSigned, delta) {
       1 - Math.exp(-smoothingDelta * activationResponse)
     );
 
-  const curveAmountAlpha = 1 - Math.exp(-smoothingDelta * 3.8);
-  entry.curveAmount = THREE.MathUtils.lerp(entry.curveAmount, curveSigned, curveAmountAlpha);
-  // A square-root-like perceptual scale makes small increases above 100%
-  // visible, while the hard upper bound remains identical at 200%.
-  const perceptualCurveStrength = Math.pow(
-    THREE.MathUtils.clamp(entry.curveAmount, 0, 1),
-    0.55
-  );
-  const targetAngularVelocity = validDelta
+  // More curvature now means more completed circles. The source speed still
+  // sets the rhythm, but a bounded opportunity-driven floor carries circular
+  // momentum across brief under-curved gaps instead of dropping to zero.
+  const sourceDrivenVelocity = (
+    0.45 + Math.min(entry.speed, 2.5) * 0.75
+  ) * THREE.MathUtils.lerp(0.55, 3.2, perceptualCurveStrength);
+  const targetAngularVelocity = validDelta || entry.curveOpportunity > 0.02
     ? THREE.MathUtils.clamp(
-      entry.speed * (0.7 + perceptualCurveStrength * 2.35),
+      sourceDrivenVelocity * entry.curveOpportunity,
       0,
-      9
+      10.5
     )
     : 0;
   const velocityResponse = targetAngularVelocity > entry.curveAngularVelocity ? 3.2 : 1.35;
@@ -950,7 +1297,7 @@ function applyCircularTravel(entry, bone, curveSigned, delta) {
     velocityAlpha
   );
 
-  const maximumPhaseStep = THREE.MathUtils.lerp(0.08, 0.17, perceptualCurveStrength);
+  const maximumPhaseStep = THREE.MathUtils.lerp(0.065, 0.18, perceptualCurveStrength);
   const phaseStep = THREE.MathUtils.clamp(
     entry.curveAngularVelocity * smoothingDelta,
     0,
@@ -961,9 +1308,26 @@ function applyCircularTravel(entry, bone, curveSigned, delta) {
     Math.PI * 2
   );
 
-  // The orbit radius is deliberately bounded. Increasing the control adds
-  // faster, rounder travel rather than accumulating an ever-growing twist.
-  const targetOrbitAmplitude = 0.36
+  const subdivisionTarget = 1 + 3.4 * THREE.MathUtils.smoothstep(
+    perceptualCurveStrength,
+    0.18,
+    1
+  );
+  entry.curveSubdivision = THREE.MathUtils.lerp(
+    entry.curveSubdivision,
+    subdivisionTarget,
+    1 - Math.exp(-smoothingDelta * 2.6)
+  );
+  const microPhaseStep = Math.min(0.34, phaseStep * entry.curveSubdivision);
+  entry.curveMicroPhase = THREE.MathUtils.euclideanModulo(
+    entry.curveMicroPhase + microPhaseStep,
+    Math.PI * 2
+  );
+
+  // Orbit radius remains bounded. Higher values redistribute part of one broad
+  // orbit into a faster secondary orbit, visually breaking a large circle into
+  // several smaller circles without accumulating joint rotation.
+  const targetOrbitAmplitude = 0.38
     * perceptualCurveStrength
     * entry.curveActivation;
   const amplitudeResponse = targetOrbitAmplitude > entry.curveOrbitAmplitude ? 3.8 : 1.8;
@@ -973,13 +1337,28 @@ function applyCircularTravel(entry, bone, curveSigned, delta) {
     1 - Math.exp(-smoothingDelta * amplitudeResponse)
   );
 
+  const subdivisionMix = THREE.MathUtils.smoothstep(
+    perceptualCurveStrength,
+    0.24,
+    1
+  );
+  const primaryWeight = THREE.MathUtils.lerp(1, 0.58, subdivisionMix);
+  const secondaryLoopWeight = 0.38 * subdivisionMix;
+  const primaryAngle = (
+    Math.cos(entry.curvePhase) * primaryWeight
+    + Math.cos(entry.curveMicroPhase) * secondaryLoopWeight
+  ) * entry.curveOrbitAmplitude;
+  const secondaryAngle = (
+    Math.sin(entry.curvePhase) * primaryWeight
+    + Math.sin(entry.curveMicroPhase) * secondaryLoopWeight
+  ) * entry.curveOrbitAmplitude;
   scratchQuaternion.setFromAxisAngle(
     entry.curveAxis,
-    Math.cos(entry.curvePhase) * entry.curveOrbitAmplitude
+    primaryAngle
   );
   scratchQuaternionB.setFromAxisAngle(
     entry.curveSecondaryAxis,
-    Math.sin(entry.curvePhase) * entry.curveOrbitAmplitude
+    secondaryAngle
   );
   scratchQuaternion.multiply(scratchQuaternionB).normalize();
   const orbitAlpha = 1 - Math.exp(-smoothingDelta * 7.2);
@@ -992,6 +1371,12 @@ function releaseCircularTravel(entry, bone, delta) {
   const releaseAlpha = 1 - Math.exp(-smoothingDelta * 4.2);
   entry.curveAmount = THREE.MathUtils.lerp(entry.curveAmount, 0, releaseAlpha);
   entry.curveActivation = THREE.MathUtils.lerp(entry.curveActivation, 0, releaseAlpha);
+  entry.curveOpportunity = THREE.MathUtils.lerp(entry.curveOpportunity, 0, releaseAlpha);
+  entry.curveSourceCurvature = THREE.MathUtils.lerp(
+    entry.curveSourceCurvature,
+    0,
+    releaseAlpha
+  );
   entry.curveAngularVelocity = THREE.MathUtils.lerp(
     entry.curveAngularVelocity,
     0,
@@ -1000,6 +1385,11 @@ function releaseCircularTravel(entry, bone, delta) {
   entry.curveOrbitAmplitude = THREE.MathUtils.lerp(
     entry.curveOrbitAmplitude,
     0,
+    releaseAlpha
+  );
+  entry.curveSubdivision = THREE.MathUtils.lerp(
+    entry.curveSubdivision,
+    1,
     releaseAlpha
   );
   scratchQuaternion.identity();
@@ -1011,8 +1401,76 @@ function releaseCircularTravel(entry, bone, delta) {
     entry.curveRotation.identity();
     entry.curveAxisReady = false;
     entry.curvePhase = 0;
+    entry.curveMicroPhase = 0;
   }
   bone.quaternion.multiply(entry.curveRotation);
+}
+
+function resetLinearizedTravel(entry, bone) {
+  entry.curveLinearizedQuaternion.copy(bone.quaternion);
+  entry.curveLinearAxisReady = false;
+  entry.curveLinearReady = false;
+}
+
+function applyLinearizedTravel(entry, bone, straightenAmount, delta) {
+  const smoothingDelta = Math.min(1 / 30, Math.max(1 / 240, delta));
+  // Keep the midpoint close to the source trajectory. A linear blend between
+  // two quaternion paths can itself introduce an extra change of axis, so the
+  // straightening response is deliberately eased: low settings remain nearly
+  // neutral while the final third progressively commits to the stable axis.
+  const straightenResponse = Math.pow(
+    THREE.MathUtils.smoothstep(straightenAmount, 0, 1),
+    2.2
+  );
+  const sourceJump = entry.sourceDeltaAngle >= 1.2;
+  if (!entry.curveLinearReady || sourceJump) {
+    entry.curveLinearizedQuaternion.copy(bone.quaternion);
+    if (entry.sourceDeltaAngle > 0.00001 && !sourceJump) {
+      entry.curveLinearAxis.copy(entry.sourceDeltaAxis);
+      entry.curveLinearAxisReady = true;
+    } else {
+      entry.curveLinearAxisReady = false;
+    }
+    entry.curveLinearReady = true;
+    return;
+  }
+
+  const validDelta = entry.sourceDeltaAngle > 0.00001 && !sourceJump;
+  if (validDelta) {
+    scratchAxis.copy(entry.sourceDeltaAxis);
+    let signedAngle = entry.sourceDeltaAngle;
+    if (!entry.curveLinearAxisReady) {
+      entry.curveLinearAxis.copy(scratchAxis);
+      entry.curveLinearAxisReady = true;
+    } else {
+      if (entry.curveLinearAxis.dot(scratchAxis) < 0) {
+        scratchAxis.multiplyScalar(-1);
+        signedAngle *= -1;
+      }
+      // At 0% the filtered axis changes slowly, converting a changing circular
+      // direction into a straighter quaternion segment. Near 100% it follows
+      // the source closely so the transition into neutral remains continuous.
+      const axisFollowRate = THREE.MathUtils.lerp(8.5, 0.12, straightenResponse);
+      entry.curveLinearAxis.lerp(
+        scratchAxis,
+        1 - Math.exp(-smoothingDelta * axisFollowRate)
+      ).normalize();
+    }
+    scratchQuaternion.setFromAxisAngle(entry.curveLinearAxis, signedAngle);
+    entry.curveLinearizedQuaternion.multiply(scratchQuaternion).normalize();
+  }
+
+  // Re-anchor slowly during travel and faster at an endpoint. This preserves
+  // the choreography's destination poses while removing curvature between them.
+  const reanchorRate = entry.speed < 0.02
+    ? THREE.MathUtils.lerp(5.5, 2.4, straightenResponse)
+    : THREE.MathUtils.lerp(4, 0.08, straightenResponse);
+  entry.curveLinearizedQuaternion.slerp(
+    bone.quaternion,
+    1 - Math.exp(-smoothingDelta * reanchorRate)
+  ).normalize();
+  const straightenWeight = straightenResponse * 0.985;
+  bone.quaternion.slerp(entry.curveLinearizedQuaternion, straightenWeight).normalize();
 }
 
 function setQuaternionAxisRotation(target, axisKey, radians) {
@@ -1095,7 +1553,6 @@ export function applyNo60Modifications({
     }
   }
   const dominantRegion = updateRelationFocus(runtime, dominantEntry, dominantSpeed, delta);
-  prepareAxisPointAttractions(runtime, values, definitions.axes, delta);
   prepareExternalSpacePoseStops(runtime, values, definitions.space, delta);
 
   for (let index = 0; index < runtime.entries.length; index += 1) {
@@ -1110,9 +1567,17 @@ export function applyNo60Modifications({
       entry.hold.copy(bone.quaternion);
       entry.curveRotation.identity();
       entry.curveActivation = 0;
+      entry.curveOpportunity = 0;
+      entry.curveSourceCurvature = 0;
       entry.curveAmount = 0;
       entry.curveAngularVelocity = 0;
+      entry.curvePhase = 0;
+      entry.curveMicroPhase = 0;
+      entry.curveSubdivision = 1;
       entry.curveAxisReady = false;
+      entry.curveLinearAxisReady = false;
+      entry.curveLinearReady = false;
+      entry.curveLinearizedQuaternion.copy(bone.quaternion);
       entry.stationary = 0;
       entry.spaceExtensionPeak = 0;
       entry.spaceMotionArmed = false;
@@ -1122,7 +1587,6 @@ export function applyNo60Modifications({
       continue;
     }
     const curveValue = resolveApplicableValue(values, definitions.curves, tags);
-    const axesValue = resolveApplicableValue(values, definitions.axes, tags);
     const syncValue = resolveApplicableValue(values, definitions.sync, tags);
     const spaceValue = resolveApplicableValue(values, definitions.space, tags);
     const relationValue = resolveApplicableValue(values, definitions.relations, tags);
@@ -1184,91 +1648,30 @@ export function applyNo60Modifications({
     }
 
     const curveSigned = (curveValue - 100) / 100;
-    if (curveSigned < -0.001) {
+    if (curveSigned < -0.001 && entry.curveMotionRoot) {
       releaseCircularTravel(entry, bone, delta);
-      bone.quaternion.slerp(entry.rest, -curveSigned * 0.78);
-      bone.quaternion.slerp(entry.previous, -curveSigned * 0.18);
+      applyLinearizedTravel(entry, bone, -curveSigned, delta);
     } else if (curveSigned > 0.001 && entry.curveMotionRoot) {
+      resetLinearizedTravel(entry, bone);
       applyCircularTravel(entry, bone, curveSigned, delta);
     } else {
+      resetLinearizedTravel(entry, bone);
       releaseCircularTravel(entry, bone, delta);
-    }
-
-    const axisSigned = (axesValue - 100) / 100;
-    if (axisSigned < -0.001 && entry.axisRotationEligible) {
-      bone.quaternion.slerp(entry.previous, -axisSigned * 0.74);
-    } else if (
-      axisSigned > 0.001
-      && entry.axisRotationEligible
-      && !entry.axisLockActive
-      && entry.sourceDeltaAngle > 0.00001
-      && entry.sourceDeltaAngle < 1.25
-    ) {
-      // Nearby-node attraction remains the primary axis behavior. This
-      // regional continuation makes Arms/Legs controls responsive even on a
-      // frame where no eligible node pair happens to be within range.
-      scratchQuaternionB.setFromAxisAngle(
-        entry.sourceDeltaAxis,
-        entry.sourceDeltaAngle * axisSigned * 0.32
-      );
-      bone.quaternion.multiply(scratchQuaternionB).normalize();
     }
 
     const spaceSigned = (spaceValue - 100) / 100;
-    const safeSpaceDelta = Math.max(1 / 240, delta);
     if (spaceSigned > 0.001) {
-      scratchQuaternion.copy(entry.rest).invert().multiply(bone.quaternion);
-      scratchEuler.setFromQuaternion(scratchQuaternion, 'XYZ');
-      const expansion = 1 + spaceSigned * 0.48;
-      scratchEuler.set(
-        scratchEuler.x * expansion,
-        scratchEuler.y * expansion,
-        scratchEuler.z * expansion,
-        'XYZ'
-      );
-      scratchQuaternion.setFromEuler(scratchEuler);
-      bone.quaternion.copy(entry.rest).multiply(scratchQuaternion);
-
-      if (runtime.spacePoseCapturePending) {
-        entry.hold.copy(bone.quaternion);
-      }
       entry.spaceMotionArmed = runtime.spacePoseMotionArmed;
       entry.spaceHoldRemaining = runtime.spacePoseHoldRemaining;
       entry.spaceHoldCooldown = runtime.spacePoseHoldCooldown;
       entry.spaceHoldWeight = runtime.spacePoseHoldWeight;
       entry.stationary = runtime.spacePoseHoldRemaining;
-    } else if (spaceSigned < -0.001) {
-      const compression = 1 + spaceSigned * 0.68;
-      scratchQuaternion.copy(entry.rest).invert().multiply(bone.quaternion);
-      scratchEuler.setFromQuaternion(scratchQuaternion, 'XYZ');
-      scratchEuler.set(
-        scratchEuler.x * compression,
-        scratchEuler.y * compression,
-        scratchEuler.z * compression,
-        'XYZ'
-      );
-      scratchQuaternion.setFromEuler(scratchEuler);
-      bone.quaternion.copy(entry.rest).multiply(scratchQuaternion);
-      entry.stationary = 0;
-      entry.spaceHoldRemaining = 0;
-      entry.spaceHoldCooldown = 0;
-      entry.spaceMotionArmed = false;
-      const releaseAlpha = 1 - Math.exp(-safeSpaceDelta * 2.4);
-      entry.spaceHoldWeight = THREE.MathUtils.lerp(entry.spaceHoldWeight, 0, releaseAlpha);
     } else {
       entry.stationary = 0;
       entry.spaceHoldRemaining = 0;
       entry.spaceHoldCooldown = 0;
       entry.spaceMotionArmed = false;
-      const releaseAlpha = 1 - Math.exp(-safeSpaceDelta * 2.4);
-      entry.spaceHoldWeight = THREE.MathUtils.lerp(entry.spaceHoldWeight, 0, releaseAlpha);
-    }
-
-    if (entry.spaceHoldWeight > 0.001) {
-      bone.quaternion.slerp(entry.hold, entry.spaceHoldWeight).normalize();
-    } else if (spaceSigned <= 0.001) {
       entry.spaceHoldWeight = 0;
-      entry.hold.copy(bone.quaternion);
     }
 
     const relationSigned = (relationValue - 100) / 100;
@@ -1372,12 +1775,15 @@ export function applyNo60Modifications({
       bone.quaternion.premultiply(scratchQuaternionB);
     }
 
-    // Axis attraction is deliberately applied last. Once a nearby node has
-    // engaged it temporarily owns the controlling joint, so the underlying
-    // mixer cannot make the joint jump away before the next major movement.
-    applyAxisPointOverride(entry, bone, delta);
-
     entry.previous.slerp(bone.quaternion, Math.min(1, delta * 18));
+  }
+  // A reach is layered over the fully modified source pose so every contact
+  // begins from the current choreography. The analytic two-joint solve rotates
+  // only a shoulder/elbow or hip/knee chain and therefore cannot stretch or
+  // translate any body segment.
+  applyAxisTouchGestures(runtime, values, definitions.axes);
+  for (const entry of runtime.entries) {
+    if (entry.axisTouchAdjusted) entry.previous.copy(entry.bone.quaternion);
   }
   runtime.spacePoseCapturePending = false;
 }

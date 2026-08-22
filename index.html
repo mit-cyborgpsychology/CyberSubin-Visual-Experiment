@@ -885,7 +885,7 @@
         <header class="sequence-timeline-heading">
           <div>
             <span>MIX-UP</span>
-            <strong id="mix-up-status" aria-live="polite">READY · COMBINE MOVEMENT SOURCES BY BODY REGION</strong>
+            <strong id="mix-up-status" aria-live="polite">READY · MIX 1–59 + GLB STYLE 2 BY BODY REGION</strong>
           </div>
           <div class="sequence-timeline-actions">
             <button id="mix-up-play" type="button">PLAY MIX</button>
@@ -903,7 +903,7 @@
               <strong>TOP / BOTTOM</strong><small>Upper and lower body from two movements</small>
             </button>
             <button type="button" data-mix-up-method="leftRight">
-              <strong>LEFT / RIGHT</strong><small>Left, center, and right from three movements</small>
+              <strong>LEFT / RIGHT</strong><small>Left and right limbs from two movements; core stays with the selected avatar</small>
             </button>
             <button type="button" data-mix-up-method="frankenstein">
               <strong>FRANKENSTEIN</strong><small>Every region from a different movement</small>
@@ -912,7 +912,7 @@
           <section class="mix-up-sources" aria-label="Movement source for each body region">
             <div class="mix-up-sources__intro">
               <span>BODY REGION SOURCES</span>
-              <p>Shorter clips loop independently. Every loop blends back to its first non-T-pose frame.</p>
+              <p>Style 2 motion is rotation-retargeted onto the selected avatar. Bone lengths, position, scale, and body structure stay with the target.</p>
             </div>
             <div id="mix-up-source-grid" class="mix-up-source-grid"></div>
           </section>

@@ -3431,6 +3431,20 @@ body.embedded-view .axis-widget {
   padding: 10px 12px 13px;
 }
 
+.mix-up-source-grid--grouped {
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+}
+
+.mix-up-source-note {
+  grid-column: 1 / -1;
+  align-self: center;
+  margin: 0;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: var(--drawer-meta-size);
+  letter-spacing: 0.08em;
+}
+
 .mix-up-source-card {
   position: relative;
   min-width: 0;

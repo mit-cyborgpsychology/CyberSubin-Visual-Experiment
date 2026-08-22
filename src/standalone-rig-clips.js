@@ -17,7 +17,8 @@ function selectMostCompleteClip(clips) {
 
 const CENTIMETER_DISPLACEMENT_FILES = new Set([
   'bruneifull.glb',
-  'myanmarfull.glb'
+  'myanmarfull.glb',
+  'thailandpart2full.glb'
 ]);
 
 function normalizeStandalonePositionTracks(clip, fileName) {

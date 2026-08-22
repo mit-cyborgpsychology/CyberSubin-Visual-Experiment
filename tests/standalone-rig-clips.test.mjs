@@ -98,7 +98,7 @@ function scalableClip(name) {
   };
 }
 
-for (const fileName of ['Bruneifull.glb', 'Myanmarfull.glb']) {
+for (const fileName of ['Bruneifull.glb', 'Myanmarfull.glb', 'Thailandpart2full.glb']) {
   const source = scalableClip('Raw Capture');
   const playback = prepareStandaloneRigClip([source], fileName);
   assert.notEqual(playback, source, `${fileName} should use a safe cloned clip`);
@@ -120,4 +120,4 @@ for (const fileName of ['Bruneifull.glb', 'Myanmarfull.glb']) {
   );
 }
 
-console.log('Brunei and Myanmar standalone translation units verified.');
+console.log('Brunei, Myanmar, and Thailand Part 2 standalone translation units verified.');

@@ -47,7 +47,7 @@ const STANDALONE_RIG_MOVEMENTS = Object.keys(STANDALONE_RIG_MODEL_URLS)
       source: 'glb-style-2',
       rigFamily: 'glb-style-2',
       sequenceCompatible: false,
-      mixUpCompatible: false
+      mixUpCompatible: true
     };
   })
   .sort((first, second) => first.fileName.localeCompare(second.fileName, undefined, {
@@ -130,7 +130,7 @@ function movementLabel(movement) {
     return `${String(movement.modelNumber).padStart(2, '0')} · ${movement.thai} — ${movement.english.trim()}`;
   }
   return movement.source === 'glb-style-2'
-    ? `${movement.fileName} · STANDALONE RIG`
+    ? `${movement.fileName} · STANDALONE RIG · MIX-UP READY`
     : movement.fileName;
 }
 
@@ -140,7 +140,7 @@ function appendMovementOptions(select) {
   const modelFolderGroup = document.createElement('optgroup');
   modelFolderGroup.label = '/MODELS · FILE NAME INDEX';
   const standaloneRigGroup = document.createElement('optgroup');
-  standaloneRigGroup.label = '/GLB-STYLE-2 · STANDALONE RIGS · NO SEQUENCE / MIX-UP';
+  standaloneRigGroup.label = '/GLB-STYLE-2 · RETARGETABLE MIX-UP SOURCES · NO SEQUENCE';
 
   for (const movement of INDEXED_MOVEMENTS) {
     const option = document.createElement('option');
